@@ -1,0 +1,21 @@
+{
+    "deployer": {
+        "previous_tokens": 0.15,
+        "success_rate": 0.10,
+        "selling_pattern": 0.10
+    },
+    "holders": {
+        "distribution": 0.10,
+        "top_holder_performance": 0.15,
+        "sniper_activity": -0.05
+    },
+    "social": {
+        "notable_mentions": 0.10,
+        "sentiment": 0.05,
+        "account_age": 0.05
+    },
+    "trading": {
+        "volume": 0.10,
+        "liquidity": 0.10
+    }
+}

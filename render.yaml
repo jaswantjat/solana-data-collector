@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: solana-data-collector
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.api.dashboard:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: REDIS_PASSWORD
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: SHYFT_API_KEY
+        sync: false
+      - key: BITQUERY_API_KEY
+        sync: false
+      - key: DISCORD_WEBHOOK_URL
+        sync: false

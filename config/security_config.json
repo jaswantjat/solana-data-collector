@@ -1,0 +1,63 @@
+{
+    "rate_limits": {
+        "default": {
+            "requests": 100,
+            "window": 60,
+            "block_duration": 300
+        },
+        "high_priority": {
+            "requests": 1000,
+            "window": 60,
+            "block_duration": 300
+        },
+        "low_priority": {
+            "requests": 50,
+            "window": 60,
+            "block_duration": 300
+        }
+    },
+    "ddos_protection": {
+        "enabled": true,
+        "max_connections_per_ip": 50,
+        "connection_timeout": 30,
+        "blacklist_threshold": 100,
+        "blacklist_duration": 3600
+    },
+    "backup": {
+        "enabled": true,
+        "interval": 3600,
+        "max_backups": 24,
+        "types": ["token_data", "analysis_data", "system_config"]
+    },
+    "audit": {
+        "enabled": true,
+        "log_level": "INFO",
+        "retention_days": 30,
+        "events": [
+            "api_request",
+            "token_analysis",
+            "wallet_analysis",
+            "system_backup",
+            "security_alert",
+            "rate_limit_exceeded"
+        ]
+    },
+    "api_protection": {
+        "require_api_key": true,
+        "key_rotation_days": 90,
+        "max_failed_attempts": 5,
+        "lockout_duration": 1800
+    },
+    "request_validation": {
+        "enabled": true,
+        "max_body_size": 1048576,
+        "allowed_content_types": [
+            "application/json",
+            "application/x-www-form-urlencoded"
+        ],
+        "required_headers": [
+            "X-API-Key",
+            "Content-Type"
+        ]
+    }
+}

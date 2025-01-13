@@ -1,0 +1,29 @@
+{
+    "max_size": 10000,
+    "ttl": 3600,
+    "cleanup_interval": 300,
+    "strategies": {
+        "token_data": {
+            "ttl": 1800,
+            "max_size": 5000
+        },
+        "wallet_analysis": {
+            "ttl": 3600,
+            "max_size": 2000
+        },
+        "market_data": {
+            "ttl": 300,
+            "max_size": 1000
+        }
+    },
+    "redis": {
+        "enabled": true,
+        "max_memory": "1gb",
+        "max_memory_policy": "allkeys-lru",
+        "key_patterns": {
+            "token_*": 1800,
+            "wallet_*": 3600,
+            "market_*": 300
+        }
+    }
+}

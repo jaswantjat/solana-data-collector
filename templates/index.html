@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solana Token Monitor</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <div class="dashboard-container">
+        <header class="header">
+            <div class="logo">
+                <i class="fas fa-cube"></i>
+                SOLANA TRACKER
+            </div>
+            <input type="text" class="search-bar" placeholder="Search for tokens, addresses...">
+            <div class="portfolio-actions">
+                <button class="btn" onclick="showAlertsModal()">
+                    <i class="fas fa-bell"></i>
+                    Alerts
+                </button>
+                <button class="btn btn-primary" onclick="showWalletModal()">
+                    <i class="fas fa-plus"></i>
+                    Add Wallet
+                </button>
+            </div>
+        </header>
+        
+        <main class="main-content">
+            <div class="stats-header">
+                <div class="stat-card">
+                    <div class="stat-title">Total Tokens</div>
+                    <div class="stat-value">{{ data.total_tokens }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-title">Average Confidence</div>
+                    <div class="stat-value">{{ "{:.1f}%".format(data.avg_confidence) }}</div>
+                </div>
+            </div>
+            
+            <div class="token-feed">
+                <div class="feed-header">
+                    <h2>Recent Token Launches</h2>
+                    <div class="feed-filters">
+                        <button class="filter active">All</button>
+                        <button class="filter">High Confidence</button>
+                        <button class="filter">New</button>
+                        <button class="filter">Trending</button>
+                    </div>
+                </div>
+                
+                <div class="token-list">
+                    {% for token in tokens %}
+                    <div class="token-card {% if token.confidence_score >= 80 %}high-confidence{% endif %}">
+                        <div class="token-header">
+                            <div class="token-info">
+                                <div class="token-name">{{ token.name }}</div>
+                                <div class="token-symbol">{{ token.symbol }}</div>
+                                <div class="token-address">{{ token.address[:8] }}...{{ token.address[-6:] }}</div>
+                            </div>
+                            <div class="token-metrics">
+                                <div class="metric">
+                                    <div class="metric-label">Market Cap</div>
+                                    <div class="metric-value">${{ "{:,.0f}".format(token.market_cap) }}</div>
+                                </div>
+                                <div class="metric">
+                                    <div class="metric-label">Price</div>
+                                    <div class="metric-value">
+                                        ${{ "{:.4f}".format(token.price) }}
+                                        <span class="price-change {% if token.price_change >= 0 %}positive{% else %}negative{% endif %}">
+                                            {{ "{:+.1f}%".format(token.price_change) }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="token-chart">
+                            {{ token.chart | safe }}
+                        </div>
+                        
+                        <div class="token-analysis">
+                            <div class="analysis-section">
+                                <div class="section-title">
+                                    <i class="fas fa-chart-line"></i>
+                                    Analysis Score
+                                </div>
+                                <div class="confidence-score {% if token.confidence_score >= 80 %}high{% elif token.confidence_score >= 60 %}medium{% else %}low{% endif %}">
+                                    {{ "{:.1f}%".format(token.confidence_score) }}
+                                </div>
+                            </div>
+                            
+                            <div class="analysis-grid">
+                                <div class="analysis-item">
+                                    <div class="item-label">
+                                        <i class="fas fa-user-tie"></i>
+                                        Deployer Score
+                                    </div>
+                                    <div class="item-value">{{ "{:.1f}%".format(token.deployer_score) }}</div>
+                                </div>
+                                
+                                <div class="analysis-item">
+                                    <div class="item-label">
+                                        <i class="fas fa-users"></i>
+                                        Holders
+                                    </div>
+                                    <div class="item-value">{{ token.holder_count }}</div>
+                                </div>
+                                
+                                <div class="analysis-item">
+                                    <div class="item-label">
+                                        <i class="fas fa-whale"></i>
+                                        Whales
+                                    </div>
+                                    <div class="item-value">{{ token.whale_count }}</div>
+                                </div>
+                                
+                                <div class="analysis-item">
+                                    <div class="item-label">
+                                        <i class="fab fa-twitter"></i>
+                                        Mentions
+                                    </div>
+                                    <div class="item-value">{{ token.twitter_mentions }}</div>
+                                </div>
+                                
+                                <div class="analysis-item">
+                                    <div class="item-label">
+                                        <i class="fas fa-trophy"></i>
+                                        Top Holder Win Rate
+                                    </div>
+                                    <div class="item-value">{{ "{:.1f}%".format(token.top_holder_win_rate) }}</div>
+                                </div>
+                                
+                                <div class="analysis-item">
+                                    <div class="item-label">
+                                        <i class="fas fa-clock"></i>
+                                        Age
+                                    </div>
+                                    <div class="item-value">{{ token.age }}d</div>
+                                </div>
+                            </div>
+                            
+                            <div class="token-actions">
+                                <a href="https://solscan.io/token/{{ token.address }}" target="_blank" class="btn btn-secondary">
+                                    <i class="fas fa-external-link"></i>
+                                    View on Solscan
+                                </a>
+                                <a href="https://birdeye.so/token/{{ token.address }}" target="_blank" class="btn btn-secondary">
+                                    <i class="fas fa-external-link"></i>
+                                    View on Birdeye
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Add Wallet Modal -->
+    <div id="walletModal" class="modal">
+        <div class="modal-content">
+            <h2>Add Wallet</h2>
+            <form id="addWalletForm">
+                <div class="form-group">
+                    <label for="walletAddress">Wallet Address</label>
+                    <input type="text" id="walletAddress" required placeholder="Enter Solana wallet address">
+                </div>
+                <div class="form-group">
+                    <label for="walletLabel">Label (Optional)</label>
+                    <input type="text" id="walletLabel" placeholder="Enter a label for this wallet">
+                </div>
+                <div class="form-actions">
+                    <button type="button" onclick="closeWalletModal()" class="btn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Add Wallet</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Alerts Modal -->
+    <div id="alertsModal" class="modal">
+        <div class="modal-content">
+            <h2>Token Alerts</h2>
+            <div class="alerts-list" id="alertsList">
+                <!-- Alerts will be populated here -->
+            </div>
+            <button class="btn btn-primary" onclick="showNewAlertForm()">
+                <i class="fas fa-plus"></i>
+                New Alert
+            </button>
+        </div>
+    </div>
+
+    <!-- Add Alert Modal -->
+    <div id="newAlertModal" class="modal">
+        <div class="modal-content">
+            <h2>Create Alert</h2>
+            <form id="newAlertForm">
+                <div class="form-group">
+                    <label for="alertToken">Token</label>
+                    <select id="alertToken" required>
+                        {% for token in tokens %}
+                        <option value="{{ token.address }}">{{ token.name }} ({{ token.symbol }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="alertType">Alert Type</label>
+                    <select id="alertType" required>
+                        <option value="price">Price</option>
+                        <option value="market_cap">Market Cap</option>
+                        <option value="confidence">Confidence Score</option>
+                        <option value="holders">Holder Count</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="alertCondition">Condition</label>
+                    <select id="alertCondition" required>
+                        <option value=">">Greater than</option>
+                        <option value="<">Less than</option>
+                        <option value="=">Equals</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="alertValue">Value</label>
+                    <input type="number" id="alertValue" required step="any">
+                </div>
+                <div class="form-group">
+                    <label for="notificationType">Notification Type</label>
+                    <select id="notificationType" required>
+                        <option value="discord">Discord</option>
+                        <option value="email">Email</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="notificationTarget">Notification Target</label>
+                    <input type="text" id="notificationTarget" required placeholder="Discord webhook URL or email address">
+                </div>
+                <div class="form-actions">
+                    <button type="button" onclick="closeNewAlertModal()" class="btn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Alert</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Auto-refresh every minute
+        setInterval(() => {
+            window.location.reload();
+        }, 60 * 1000);
+        
+        // Filter buttons
+        document.querySelectorAll('.filter').forEach(button => {
+            button.addEventListener('click', () => {
+                // Remove active class from all buttons
+                document.querySelectorAll('.filter').forEach(b => b.classList.remove('active'));
+                // Add active class to clicked button
+                button.classList.add('active');
+                
+                // Get filter type
+                const filter = button.textContent.toLowerCase();
+                
+                // Filter token cards
+                document.querySelectorAll('.token-card').forEach(card => {
+                    const confidence = parseFloat(card.querySelector('.confidence-score').textContent);
+                    const age = parseInt(card.querySelector('.analysis-item:last-child .item-value').textContent);
+                    
+                    switch (filter) {
+                        case 'high confidence':
+                            card.style.display = confidence >= 80 ? 'block' : 'none';
+                            break;
+                        case 'new':
+                            card.style.display = age <= 1 ? 'block' : 'none';
+                            break;
+                        case 'trending':
+                            const priceChange = parseFloat(card.querySelector('.price-change').textContent);
+                            card.style.display = priceChange >= 10 ? 'block' : 'none';
+                            break;
+                        default:
+                            card.style.display = 'block';
+                    }
+                });
+            });
+        });
+        
+        // Search functionality
+        const searchBar = document.querySelector('.search-bar');
+        searchBar.addEventListener('input', (e) => {
+            const search = e.target.value.toLowerCase();
+            
+            document.querySelectorAll('.token-card').forEach(card => {
+                const name = card.querySelector('.token-name').textContent.toLowerCase();
+                const symbol = card.querySelector('.token-symbol').textContent.toLowerCase();
+                const address = card.querySelector('.token-address').textContent.toLowerCase();
+                
+                if (name.includes(search) || symbol.includes(search) || address.includes(search)) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        });
+
+        // Wallet Modal Functions
+        function showWalletModal() {
+            document.getElementById('walletModal').style.display = 'block';
+        }
+
+        function closeWalletModal() {
+            document.getElementById('walletModal').style.display = 'none';
+        }
+
+        document.getElementById('addWalletForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const address = document.getElementById('walletAddress').value;
+            const label = document.getElementById('walletLabel').value;
+            
+            try {
+                const response = await fetch('/api/wallets', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        address,
+                        label: label || null,
+                        watch_only: true
+                    })
+                });
+                
+                if (!response.ok) throw new Error('Failed to add wallet');
+                
+                closeWalletModal();
+                // Refresh the page to show updated wallet list
+                window.location.reload();
+            } catch (error) {
+                alert('Error adding wallet: ' + error.message);
+            }
+        });
+
+        // Alerts Modal Functions
+        function showAlertsModal() {
+            loadAlerts();
+            document.getElementById('alertsModal').style.display = 'block';
+        }
+
+        function closeAlertsModal() {
+            document.getElementById('alertsModal').style.display = 'none';
+        }
+
+        function showNewAlertForm() {
+            document.getElementById('alertsModal').style.display = 'none';
+            document.getElementById('newAlertModal').style.display = 'block';
+        }
+
+        function closeNewAlertModal() {
+            document.getElementById('newAlertModal').style.display = 'none';
+            document.getElementById('alertsModal').style.display = 'block';
+        }
+
+        async function loadAlerts() {
+            try {
+                const response = await fetch('/api/alerts');
+                const alerts = await response.json();
+                
+                const alertsList = document.getElementById('alertsList');
+                alertsList.innerHTML = alerts.map(alert => `
+                    <div class="alert-item">
+                        <div class="alert-info">
+                            <div class="alert-token">${alert.token_address}</div>
+                            <div class="alert-condition">${alert.condition.type} ${alert.condition.operator} ${alert.condition.value}</div>
+                        </div>
+                        <div class="alert-actions">
+                            <button onclick="toggleAlert('${alert.id}')" class="btn ${alert.is_active ? 'active' : ''}">
+                                ${alert.is_active ? 'Active' : 'Inactive'}
+                            </button>
+                            <button onclick="deleteAlert('${alert.id}')" class="btn btn-danger">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading alerts:', error);
+            }
+        }
+
+        document.getElementById('newAlertForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = {
+                id: Date.now().toString(),
+                token_address: document.getElementById('alertToken').value,
+                condition: {
+                    type: document.getElementById('alertType').value,
+                    operator: document.getElementById('alertCondition').value,
+                    value: parseFloat(document.getElementById('alertValue').value)
+                },
+                notification_type: document.getElementById('notificationType').value,
+                notification_target: document.getElementById('notificationTarget').value,
+                created_at: new Date().toISOString(),
+                is_active: true
+            };
+            
+            try {
+                const response = await fetch('/api/alerts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (!response.ok) throw new Error('Failed to create alert');
+                
+                closeNewAlertModal();
+                showAlertsModal();
+            } catch (error) {
+                alert('Error creating alert: ' + error.message);
+            }
+        });
+
+        async function toggleAlert(alertId) {
+            try {
+                const response = await fetch(`/api/alerts/${alertId}/toggle`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Failed to toggle alert');
+                
+                loadAlerts();
+            } catch (error) {
+                alert('Error toggling alert: ' + error.message);
+            }
+        }
+
+        async function deleteAlert(alertId) {
+            if (!confirm('Are you sure you want to delete this alert?')) return;
+            
+            try {
+                const response = await fetch(`/api/alerts/${alertId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) throw new Error('Failed to delete alert');
+                
+                loadAlerts();
+            } catch (error) {
+                alert('Error deleting alert: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

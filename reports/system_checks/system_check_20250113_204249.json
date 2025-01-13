@@ -1,0 +1,54 @@
+{
+  "database": {
+    "postgres_installation": "not_installed",
+    "database_exists": "not_exists",
+    "configuration": "not_configured",
+    "status": "not_ready",
+    "actions_needed": [
+      "Install PostgreSQL: brew install postgresql",
+      "Create database: createdb solana_data",
+      "Configure DATABASE_URL in .env file"
+    ]
+  },
+  "redis": {
+    "redis_installation": "not_installed",
+    "server_status": "not_running",
+    "configuration": "not_configured",
+    "status": "not_ready",
+    "actions_needed": [
+      "Install Redis: brew install redis",
+      "Start Redis server: brew services start redis",
+      "Configure REDIS_URL in .env file"
+    ]
+  },
+  "dependencies": {
+    "status": "error",
+    "message": "duplicate base class TimeoutError"
+  },
+  "environment": {
+    "required_variables": [
+      "DATABASE_URL",
+      "DATABASE_POOL_SIZE",
+      "DATABASE_MAX_OVERFLOW",
+      "DATABASE_POOL_TIMEOUT",
+      "REDIS_URL",
+      "REDIS_DB",
+      "REDIS_POOL_SIZE",
+      "REDIS_TIMEOUT"
+    ],
+    "missing_variables": [
+      "DATABASE_URL",
+      "DATABASE_POOL_SIZE",
+      "DATABASE_MAX_OVERFLOW",
+      "DATABASE_POOL_TIMEOUT",
+      "REDIS_URL",
+      "REDIS_DB",
+      "REDIS_POOL_SIZE",
+      "REDIS_TIMEOUT"
+    ],
+    "status": "not_ready",
+    "actions_needed": [
+      "Add missing environment variables to .env file"
+    ]
+  }
+}
