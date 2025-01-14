@@ -5,18 +5,34 @@ services:
     env: python
     region: oregon
     plan: starter
+    runtime: python3.11
     buildCommand: |
-      # Update and install system dependencies
-      apt-get update
-      apt-get install -y build-essential libffi-dev python3-dev pkg-config libssl-dev
+      # Update package lists and install system dependencies
+      apt-get -y update
+      apt-get -y upgrade
+      apt-get install -y --no-install-recommends \
+        build-essential \
+        libffi-dev \
+        python3-dev \
+        pkg-config \
+        libssl-dev \
+        python3.11-dev \
+        gcc \
+        g++ \
+        make
       
-      # Upgrade pip and install wheel
-      python -m pip install --upgrade pip
-      pip install wheel setuptools
+      # Clean up apt cache
+      apt-get clean
+      rm -rf /var/lib/apt/lists/*
       
-      # Install Python packages with explicit cryptography installation
-      pip install cryptography==41.0.7
-      pip install -r requirements.txt
+      # Upgrade pip and install build tools
+      python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+      
+      # Install cryptography with explicit version and build dependencies
+      pip install --no-cache-dir cryptography==41.0.7
+      
+      # Install other requirements
+      pip install --no-cache-dir -r requirements.txt
       
       # Verify deployment
       python scripts/deploy_verify.py
@@ -25,6 +41,8 @@ services:
     healthCheckPath: /api/health
     numInstances: 1
     envVars:
+      - key: PYTHONPATH
+        value: /app
       - key: PYTHON_VERSION
         value: 3.11.3
       - key: LOG_LEVEL
