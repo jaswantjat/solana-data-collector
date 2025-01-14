@@ -1,0 +1,25 @@
+{
+  "2": {
+    "conditions": [
+      {
+        "field": "volume",
+        "operator": "less_than",
+        "value": "1000"
+      }
+    ],
+    "priority": "low",
+    "enabled": true
+  },
+  "3": {
+    "conditions": [
+      {
+        "field": "price_change",
+        "operator": "greater_than",
+        "value": "10"
+      }
+    ],
+    "priority": "high",
+    "enabled": true,
+    "created_at": "2025-01-14T11:31:20.623754"
+  }
+}

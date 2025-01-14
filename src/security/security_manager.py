@@ -11,7 +11,7 @@ import hmac
 import base64
 from dataclasses import dataclass
 from fastapi import Request, HTTPException
-import aioredis
+import redis.asyncio as redis
 import asyncio
 from functools import wraps
 
@@ -30,8 +30,7 @@ class SecurityManager:
         self.fernet = Fernet(self.encryption_key)
         
         # Initialize Redis for rate limiting
-        self.redis = None
-        self._init_redis()
+        self.redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost"))
         
         # Rate limit configurations
         self.rate_limits = {
@@ -49,11 +48,7 @@ class SecurityManager:
     async def _init_redis(self):
         """Initialize Redis connection"""
         try:
-            self.redis = await aioredis.from_url(
-                os.getenv("REDIS_URL", "redis://localhost"),
-                encoding="utf-8",
-                decode_responses=True
-            )
+            await self.redis.ping()
         except Exception as e:
             logger.error(f"Failed to initialize Redis: {str(e)}")
             
@@ -130,7 +125,7 @@ class SecurityManager:
     async def check_rate_limit(self, key: str, limit_type: str = "default") -> bool:
         """Check if request is within rate limits"""
         try:
-            if not self.redis:
+            if not await self.redis.ping():
                 return True
                 
             config = self.rate_limits.get(limit_type, self.rate_limits["default"])

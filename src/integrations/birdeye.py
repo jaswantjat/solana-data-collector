@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Optional
 import os
 import json
-from urllib.parse import urljoin
 
 from ..error_handling.api_errors import (
     APIError,
@@ -14,33 +13,23 @@ from ..error_handling.api_errors import (
 
 logger = logging.getLogger(__name__)
 
-class JupiterAPI:
+class BirdeyeAPI:
     def __init__(self):
-        self.api_key = os.getenv("JUPITER_API_KEY")
+        self.api_key = os.getenv("BIRDEYE_API_KEY")
         if not self.api_key:
-            raise APIKeyError("Jupiter")
+            raise APIKeyError("Birdeye")
             
-        self.base_url = "https://price.jup.ag/v4"
+        self.base_url = "https://public-api.birdeye.so/public"
         self.session = None
         self.max_retries = 3
-        self.timeout = aiohttp.ClientTimeout(total=10)  # 10 seconds timeout
         
     async def initialize(self):
-        """Initialize Jupiter API session"""
+        """Initialize Birdeye API session"""
         if not self.session:
-            # Use a DNS resolver that doesn't rely on the system's DNS
-            connector = aiohttp.TCPConnector(
-                ttl_dns_cache=300,  # Cache DNS results for 5 minutes
-                use_dns_cache=True,
-                ssl=False  # Disable SSL verification if needed
-            )
-            self.session = aiohttp.ClientSession(
-                connector=connector,
-                timeout=self.timeout
-            )
+            self.session = aiohttp.ClientSession()
             
     async def close(self):
-        """Close Jupiter API session"""
+        """Close Birdeye API session"""
         if self.session:
             await self.session.close()
             self.session = None
@@ -55,24 +44,44 @@ class JupiterAPI:
         if not self.session:
             await self.initialize()
             
-        url = urljoin(self.base_url, endpoint)
+        url = f"{self.base_url}/{endpoint}"
         
         try:
             async with self.session.get(
                 url,
                 params=params,
-                headers={"Authorization": f"Bearer {self.api_key}"}
+                headers={"X-API-KEY": self.api_key}
             ) as response:
+                # Handle rate limiting
+                if response.status == 429:
+                    retry_after = int(response.headers.get("Retry-After", 60))
+                    logger.warning(f"Rate limited by Birdeye API, retry after {retry_after}s")
+                    return {"success": False, "error": "rate_limit", "retry_after": retry_after}
+                    
+                # Handle authentication errors
+                if response.status == 401:
+                    logger.error("Invalid Birdeye API key")
+                    return {"success": False, "error": "invalid_api_key"}
+                    
                 try:
                     data = await response.json()
                 except Exception as e:
-                    logger.error(f"Error parsing Jupiter response: {str(e)}")
+                    logger.error(f"Error parsing Birdeye response: {str(e)}")
                     return {"success": False, "error": "invalid_response"}
+                    
+                # Handle 404 errors with specific token not found message
+                if response.status == 404:
+                    logger.warning(f"Token not found in Birdeye: {params.get('address')}")
+                    return {
+                        "success": False,
+                        "error": "token_not_found",
+                        "token": params.get("address")
+                    }
                     
                 if response.status != 200:
                     error = handle_api_error(
                         Exception(str(data.get("message", "Unknown error"))),
-                        "Jupiter",
+                        "Birdeye",
                         endpoint,
                         response.status,
                         data
@@ -88,15 +97,8 @@ class JupiterAPI:
                     
                 return {"success": True, "data": data}
                 
-        except aiohttp.ClientConnectorError as e:
-            logger.error(f"Connection error to Jupiter API: {str(e)}")
-            if retry_count < self.max_retries:
-                logger.info(f"Retrying Jupiter API connection ({retry_count + 1}/{self.max_retries})")
-                return await self._make_request(endpoint, params, retry_count + 1)
-            return {"success": False, "error": "connection_error"}
-            
         except Exception as e:
-            error = handle_api_error(e, "Jupiter", endpoint)
+            error = handle_api_error(e, "Birdeye", endpoint)
             if should_retry(error, retry_count, self.max_retries):
                 return await self._make_request(
                     endpoint,
@@ -106,40 +108,43 @@ class JupiterAPI:
             return {"success": False, "error": str(error)}
             
     async def get_token_price(self, token_address: str) -> Dict:
-        """Get token price information from Jupiter"""
+        """Get token price information"""
         try:
             # Validate token address format
             if not token_address or len(token_address) < 32:
                 return {
                     "price": 0,
                     "price_change_24h": 0,
+                    "volume_24h": 0,
                     "error": "invalid_token_address"
                 }
                 
-            # Try getting price from Jupiter
             result = await self._make_request(
-                f"price/{token_address}/USDC",
-                {"vsToken": "USDC"}
+                "price",
+                {"address": token_address}
             )
             
             if not result.get("success"):
                 error = result.get("error", "unknown_error")
-                logger.error(f"Error fetching price from Jupiter: {error}")
+                logger.error(f"Error fetching price from Birdeye: {error}")
                 
-                # If connection error, try alternative endpoint
-                if error == "connection_error":
+                # If token not found, try alternative price sources
+                if error == "token_not_found":
+                    logger.info(f"Token {token_address} not found in Birdeye, trying alternative sources")
                     return await self._get_alternative_price(token_address)
                     
                 return {
                     "price": 0,
                     "price_change_24h": 0,
+                    "volume_24h": 0,
                     "error": error
                 }
                 
             data = result["data"]
             return {
-                "price": float(data.get("price", 0)),
+                "price": float(data.get("value", 0)),
                 "price_change_24h": float(data.get("priceChange24h", 0)),
+                "volume_24h": float(data.get("volume24h", 0)),
                 "error": None
             }
             
@@ -148,33 +153,32 @@ class JupiterAPI:
             return {
                 "price": 0,
                 "price_change_24h": 0,
+                "volume_24h": 0,
                 "error": str(e)
             }
             
     async def _get_alternative_price(self, token_address: str) -> Dict:
-        """Get price from alternative Jupiter endpoint"""
+        """Get price from alternative sources when Birdeye fails"""
         try:
-            # Try getting price from alternative endpoint
+            # Try getting price from DEX pools
             result = await self._make_request(
-                "quote",
-                {
-                    "inputMint": token_address,
-                    "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
-                    "amount": "1000000"  # 1 token
-                }
+                "dex_price",
+                {"address": token_address}
             )
             
             if result.get("success"):
                 data = result["data"]
                 return {
-                    "price": float(data.get("price", 0)),
-                    "price_change_24h": 0,  # Not available from quote endpoint
+                    "price": float(data.get("value", 0)),
+                    "price_change_24h": float(data.get("priceChange24h", 0)),
+                    "volume_24h": float(data.get("volume24h", 0)),
                     "error": None
                 }
                 
             return {
                 "price": 0,
                 "price_change_24h": 0,
+                "volume_24h": 0,
                 "error": "price_not_available"
             }
             
@@ -183,5 +187,6 @@ class JupiterAPI:
             return {
                 "price": 0,
                 "price_change_24h": 0,
+                "volume_24h": 0,
                 "error": "alternative_price_error"
             }

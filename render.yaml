@@ -1,29 +1,57 @@
 services:
+  # Main web service
   - type: web
     name: solana-data-collector
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn src.api.dashboard:app --host 0.0.0.0 --port $PORT
-    autoDeploy: true
-    healthCheckPath: /health
+    startCommand: python -m src.main
+    autoDeploy: false  # Disable auto-deploy for controlled updates
+    healthCheckPath: /api/health
+    numInstances: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MONITORING_INTERVAL
+        value: 10
+      - key: MAX_CONCURRENT_TASKS
+        value: 5
+      # Secure environment variables
       - key: DATABASE_URL
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: REDIS_PASSWORD
         sync: false
       - key: HELIUS_API_KEY
         sync: false
-      - key: SHYFT_API_KEY
-        sync: false
-      - key: BITQUERY_API_KEY
+      - key: TWITTER_API_KEY
         sync: false
       - key: DISCORD_WEBHOOK_URL
         sync: false
+      - key: SOLSCAN_API_KEY
+        sync: false
+      - key: SHYFT_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 10
+    scaling:
+      minInstances: 1
+      maxInstances: 3
+      targetMemoryPercent: 80
+      targetCPUPercent: 80
+    metrics:
+      - type: cpu
+      - type: memory
+      - type: requests
+    alerts:
+      - type: cpu
+        threshold: 80
+        window: 5m
+      - type: memory
+        threshold: 80
+        window: 5m
+      - type: http_error_rate
+        threshold: 5
+        window: 5m

@@ -1,0 +1,65 @@
+{
+  "valid_tokens": [
+    {
+      "token": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "success": false,
+      "error": "'HeliusAPI' object has no attribute 'get_token_transactions'"
+    },
+    {
+      "token": "So11111111111111111111111111111111111111112",
+      "success": false,
+      "error": "'HeliusAPI' object has no attribute 'get_token_transactions'"
+    },
+    {
+      "token": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      "success": false,
+      "error": "'HeliusAPI' object has no attribute 'get_token_transactions'"
+    }
+  ],
+  "invalid_tokens": [
+    {
+      "token": "InvalidToken123456789",
+      "success": false,
+      "expected_failure": true
+    },
+    {
+      "token": "NotARealToken987654321",
+      "success": false,
+      "expected_failure": true
+    },
+    {
+      "token": "0x1234567890",
+      "success": false,
+      "expected_failure": true
+    }
+  ],
+  "edge_cases": [
+    {
+      "token": "",
+      "success": false,
+      "expected_failure": true
+    },
+    {
+      "token": "00000000000000000000000000000000000000000000",
+      "success": false,
+      "expected_failure": true
+    },
+    {
+      "token": "11111111111111111111111111111111111111111111",
+      "success": false,
+      "expected_failure": true
+    },
+    {
+      "token": "!@#$%^&*()",
+      "success": false,
+      "expected_failure": true
+    }
+  ],
+  "summary": {
+    "total_tests": 10,
+    "successful": 7,
+    "failed": 3,
+    "alerts_triggered": 0,
+    "success_rate": 70.0
+  }
+}

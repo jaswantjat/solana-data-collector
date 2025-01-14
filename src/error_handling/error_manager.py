@@ -8,6 +8,8 @@ from collections import defaultdict
 import json
 import traceback
 
+from ..events.event_manager import event_manager
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -27,7 +29,7 @@ class CircuitBreaker:
         self.state = "closed"  # closed, open, half-open
         self.last_state_change = time.time()
         
-    def record_failure(self):
+    async def record_failure(self):
         """Record a failure and potentially open the circuit"""
         current_time = time.time()
         if current_time - self.last_failure_time > self.config.error_window:
@@ -41,7 +43,17 @@ class CircuitBreaker:
             self.last_state_change = current_time
             logger.warning(f"Circuit breaker {self.name} opened due to {self.failures} failures")
             
-    def record_success(self):
+            # Emit circuit breaker event
+            await event_manager.emit(
+                "circuit_breaker",
+                {
+                    "service": self.name,
+                    "state": "open",
+                    "failures": self.failures
+                }
+            )
+            
+    async def record_success(self):
         """Record a success and potentially close the circuit"""
         if self.state == "half-open":
             self.state = "closed"
@@ -49,18 +61,30 @@ class CircuitBreaker:
             self.last_state_change = time.time()
             logger.info(f"Circuit breaker {self.name} closed after successful recovery")
             
-    def allow_request(self) -> bool:
+            # Emit circuit breaker event
+            await event_manager.emit(
+                "circuit_breaker",
+                {
+                    "service": self.name,
+                    "state": "closed",
+                    "failures": self.failures
+                }
+            )
+            
+    def should_allow_request(self) -> bool:
         """Check if a request should be allowed"""
+        if self.state == "closed":
+            return True
+            
         current_time = time.time()
-        
         if self.state == "open":
-            if current_time - self.last_state_change > self.config.circuit_breaker_timeout:
+            if current_time - self.last_state_change >= self.config.circuit_breaker_timeout:
                 self.state = "half-open"
                 self.last_state_change = current_time
-                logger.info(f"Circuit breaker {self.name} entering half-open state")
                 return True
             return False
             
+        # Half-open state
         return True
 
 class ErrorManager:
@@ -88,108 +112,133 @@ class ErrorManager:
         **kwargs
     ) -> Any:
         """Execute a function with fallback and circuit breaker"""
-        circuit_breaker = self.circuit_breakers.get(service_name)
-        if not circuit_breaker:
-            circuit_breaker = CircuitBreaker(service_name, ErrorConfig())
-            self.circuit_breakers[service_name] = circuit_breaker
-            
-        if not circuit_breaker.allow_request():
+        breaker = self.circuit_breakers.get(service_name)
+        if breaker and not breaker.should_allow_request():
             logger.warning(f"Circuit breaker preventing request to {service_name}")
             return await self._handle_fallback(service_name, *args, **kwargs)
             
         try:
             result = await primary_func(*args, **kwargs)
-            circuit_breaker.record_success()
+            if breaker:
+                await breaker.record_success()
             return result
             
         except Exception as e:
-            circuit_breaker.record_failure()
-            self._record_error(service_name, e)
+            logger.error(f"Error in {service_name}: {str(e)}")
+            await self._record_error(service_name, e)
+            
+            if breaker:
+                await breaker.record_failure()
+                
             return await self._handle_fallback(service_name, *args, **kwargs)
             
     async def _handle_fallback(self, service_name: str, *args, **kwargs) -> Any:
         """Handle fallback for a failed service"""
-        fallback = self.fallback_handlers.get(service_name)
-        if fallback:
-            try:
-                return await fallback(*args, **kwargs)
-            except Exception as e:
-                logger.error(f"Fallback handler for {service_name} failed: {str(e)}")
-                
-        return None
-        
-    def _record_error(self, service_name: str, error: Exception):
+        handler = self.fallback_handlers.get(service_name)
+        if not handler:
+            logger.warning(f"No fallback handler for {service_name}")
+            return None
+            
+        try:
+            result = await handler(*args, **kwargs)
+            await event_manager.emit(
+                "fallback_success",
+                {
+                    "service": service_name,
+                    "args": str(args),
+                    "kwargs": str(kwargs)
+                }
+            )
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in fallback for {service_name}: {str(e)}")
+            await event_manager.emit(
+                "fallback_failure",
+                {
+                    "service": service_name,
+                    "error": str(e)
+                }
+            )
+            return None
+            
+    async def _record_error(self, service_name: str, error: Exception):
         """Record an error for analysis"""
-        self.error_counts[service_name] += 1
-        
-        error_info = {
+        current_time = time.time()
+        error_data = {
             "service": service_name,
-            "error_type": type(error).__name__,
-            "error_message": str(error),
-            "timestamp": datetime.utcnow().isoformat(),
-            "stacktrace": traceback.format_exc()
+            "error": str(error),
+            "type": type(error).__name__,
+            "traceback": traceback.format_exc(),
+            "timestamp": current_time
         }
         
-        self.error_history.append(error_info)
+        self.error_counts[service_name] += 1
+        self.error_history.append(error_data)
         
-        # Keep only last 1000 errors
+        # Trim error history
         if len(self.error_history) > 1000:
             self.error_history = self.error_history[-1000:]
             
-        logger.error(f"Service {service_name} error: {str(error)}")
+        # Emit error event
+        await event_manager.emit(
+            "service_error",
+            error_data,
+            source=service_name
+        )
         
-    async def get_error_stats(self) -> Dict:
+    async def get_error_stats(self) -> Dict[str, Any]:
         """Get error statistics"""
-        return {
-            "error_counts": dict(self.error_counts),
+        stats = {
+            "total_errors": sum(self.error_counts.values()),
+            "errors_by_service": dict(self.error_counts),
             "circuit_breaker_states": {
                 name: breaker.state
                 for name, breaker in self.circuit_breakers.items()
-            },
-            "recent_errors": self.error_history[-10:]  # Last 10 errors
-        }
-        
-    async def analyze_errors(self) -> Dict:
-        """Analyze error patterns"""
-        error_patterns = defaultdict(int)
-        service_health = {}
-        
-        for error in self.error_history:
-            error_key = f"{error['service']}:{error['error_type']}"
-            error_patterns[error_key] += 1
-            
-        for service in self.error_counts:
-            recent_errors = sum(
-                1 for error in self.error_history
-                if error['service'] == service
-                and datetime.fromisoformat(error['timestamp']) > datetime.utcnow() - timedelta(hours=1)
-            )
-            
-            service_health[service] = {
-                "status": "healthy" if recent_errors < 5 else "degraded" if recent_errors < 10 else "unhealthy",
-                "error_rate": recent_errors / 3600,  # errors per second in last hour
-                "circuit_breaker_status": self.circuit_breakers.get(service, CircuitBreaker(service, ErrorConfig())).state
             }
-            
-        return {
-            "error_patterns": dict(error_patterns),
-            "service_health": service_health
         }
+        
+        # Emit stats event
+        await event_manager.emit("error_stats", stats)
+        
+        return stats
+        
+    async def analyze_errors(self) -> Dict[str, Any]:
+        """Analyze error patterns"""
+        current_time = time.time()
+        window_start = current_time - 3600  # Last hour
+        
+        recent_errors = [
+            e for e in self.error_history
+            if e["timestamp"] >= window_start
+        ]
+        
+        analysis = {
+            "error_rate": len(recent_errors) / 3600,
+            "errors_by_type": defaultdict(int),
+            "errors_by_service": defaultdict(int)
+        }
+        
+        for error in recent_errors:
+            analysis["errors_by_type"][error["type"]] += 1
+            analysis["errors_by_service"][error["service"]] += 1
+            
+        # Emit analysis event
+        await event_manager.emit("error_analysis", analysis)
+        
+        return analysis
         
     async def reset_service(self, service_name: str):
         """Reset error counts and circuit breaker for a service"""
-        if service_name in self.circuit_breakers:
-            self.circuit_breakers[service_name] = CircuitBreaker(
-                service_name,
-                self.error_configs.get(service_name, ErrorConfig())
-            )
-            
         self.error_counts[service_name] = 0
-        
-        # Remove service errors from history
-        self.error_history = [
-            error for error in self.error_history
-            if error['service'] != service_name
-        ]
-        
-        logger.info(f"Reset error tracking for service: {service_name}")
+        if service_name in self.circuit_breakers:
+            breaker = self.circuit_breakers[service_name]
+            breaker.failures = 0
+            breaker.state = "closed"
+            breaker.last_state_change = time.time()
+            
+            # Emit reset event
+            await event_manager.emit(
+                "service_reset",
+                {"service": service_name}
+            )

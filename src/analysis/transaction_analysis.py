@@ -52,109 +52,72 @@ class TransactionAnalysis:
         with open(self.suspicious_patterns_file, 'w') as f:
             json.dump(self.suspicious_patterns, f, indent=2)
 
+    async def initialize(self):
+        """Initialize API connections"""
+        await self.helius.initialize()
+        await self.jupiter.initialize()
+        
+    async def close(self):
+        """Close API connections"""
+        await self.helius.close()
+        await self.jupiter.close()
+
     async def analyze_transactions(self, token_address: str, timeframe: str = "1h") -> Dict:
         """Analyze token transactions"""
         try:
             # Get transactions
             transactions = await self.helius.get_token_transactions(token_address)
             if not transactions:
-                return self._create_empty_analysis(token_address)
-
-            # Update transaction history
-            current_time = datetime.now().isoformat()
-            if token_address not in self.transaction_history:
-                self.transaction_history[token_address] = {}
-            self.transaction_history[token_address][current_time] = transactions
-            self._save_history()
+                return {
+                    "transaction_count": 0,
+                    "buy_sell_ratio": float('inf'),
+                    "avg_transaction_size": 0.0,
+                    "volume_24h": 0.0,
+                    "largest_transaction": 0.0,
+                    "unique_wallets": 0,
+                    "suspicious_patterns": []
+                }
 
             # Calculate metrics
-            buy_sell_ratio = await self._calculate_buy_sell_ratio(transactions)
-            volume_analysis = await self._analyze_volume(transactions)
-            suspicious_patterns = await self._detect_suspicious_patterns(transactions)
-            liquidity_info = await self._monitor_liquidity(token_address)
-            price_impact = await self._analyze_price_impact(token_address)
+            buy_volume = 0
+            sell_volume = 0
+            total_volume = 0
+            transaction_sizes = []
+            unique_wallets = set()
 
+            for tx in transactions:
+                amount = float(tx.get("amount", 0))
+                total_volume += amount
+                transaction_sizes.append(amount)
+                
+                if "from_address" in tx:
+                    unique_wallets.add(tx["from_address"])
+                if "to_address" in tx:
+                    unique_wallets.add(tx["to_address"])
+                    
+                if tx.get("is_buy", False):
+                    buy_volume += amount
+                else:
+                    sell_volume += amount
+
+            # Calculate metrics
+            transaction_count = len(transactions)
+            avg_transaction_size = sum(transaction_sizes) / max(len(transaction_sizes), 1)
+            buy_sell_ratio = buy_volume / max(sell_volume, 1e-10)  # Avoid division by zero
+            
             return {
-                "token_address": token_address,
-                "timeframe": timeframe,
+                "transaction_count": transaction_count,
                 "buy_sell_ratio": buy_sell_ratio,
-                "volume_analysis": volume_analysis,
-                "suspicious_patterns": suspicious_patterns,
-                "liquidity": liquidity_info,
-                "price_impact": price_impact,
-                "timestamp": current_time
+                "avg_transaction_size": avg_transaction_size,
+                "volume_24h": total_volume,
+                "largest_transaction": max(transaction_sizes) if transaction_sizes else 0,
+                "unique_wallets": len(unique_wallets),
+                "suspicious_patterns": await self._detect_suspicious_patterns(transactions)
             }
 
         except Exception as e:
             logger.error(f"Error analyzing transactions for {token_address}: {str(e)}")
-            return self._create_empty_analysis(token_address)
-
-    async def _calculate_buy_sell_ratio(self, transactions: List[Dict]) -> Dict:
-        """Calculate buy/sell ratio metrics"""
-        try:
-            buy_volume = 0
-            sell_volume = 0
-            buy_count = 0
-            sell_count = 0
-
-            for tx in transactions:
-                amount = float(tx.get("amount", 0))
-                if tx.get("type") == "buy":
-                    buy_volume += amount
-                    buy_count += 1
-                elif tx.get("type") == "sell":
-                    sell_volume += amount
-                    sell_count += 1
-
-            total_volume = buy_volume + sell_volume
-            total_count = buy_count + sell_count
-
-            return {
-                "buy_volume": buy_volume,
-                "sell_volume": sell_volume,
-                "buy_count": buy_count,
-                "sell_count": sell_count,
-                "volume_ratio": buy_volume / sell_volume if sell_volume > 0 else float('inf'),
-                "count_ratio": buy_count / sell_count if sell_count > 0 else float('inf'),
-                "buy_pressure": buy_volume / total_volume if total_volume > 0 else 0
-            }
-
-        except Exception as e:
-            logger.error(f"Error calculating buy/sell ratio: {str(e)}")
-            return {}
-
-    async def _analyze_volume(self, transactions: List[Dict]) -> Dict:
-        """Analyze trading volume patterns"""
-        try:
-            # Group transactions by time intervals
-            intervals = defaultdict(float)
-            for tx in transactions:
-                if tx.get("timestamp"):
-                    hour = datetime.fromisoformat(tx["timestamp"]).strftime("%Y-%m-%d %H:00")
-                    intervals[hour] += float(tx.get("amount", 0))
-
-            if not intervals:
-                return {}
-
-            # Calculate volume metrics
-            volumes = list(intervals.values())
-            avg_volume = sum(volumes) / len(volumes)
-            max_volume = max(volumes)
-            min_volume = min(volumes)
-            volatility = (max_volume - min_volume) / avg_volume if avg_volume > 0 else 0
-
-            return {
-                "total_volume": sum(volumes),
-                "average_volume": avg_volume,
-                "max_volume": max_volume,
-                "min_volume": min_volume,
-                "volume_volatility": volatility,
-                "volume_by_hour": dict(intervals)
-            }
-
-        except Exception as e:
-            logger.error(f"Error analyzing volume: {str(e)}")
-            return {}
+            raise
 
     async def _detect_suspicious_patterns(self, transactions: List[Dict]) -> List[Dict]:
         """Detect suspicious transaction patterns"""

@@ -1,112 +1,152 @@
-import os
+import aiohttp
 import logging
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+from typing import Dict, List, Optional
+import os
+from datetime import datetime, timedelta
+import json
 import asyncio
-from .api_manager import APIManager
+
+from ..error_handling.api_errors import (
+    APIError,
+    APIKeyError,
+    handle_api_error,
+    should_retry
+)
+from .base_api import BaseAPI, APIConfig
+from ..test.mock_data import (
+    get_mock_holders,
+    get_mock_transactions,
+    get_mock_deployer,
+    should_use_mock_data
+)
 
 logger = logging.getLogger(__name__)
 
-class HeliusAPI:
+class HeliusAPI(BaseAPI):
+    """Helius API integration"""
+    
     def __init__(self):
-        self.api_key = os.getenv("HELIUS_API_KEY")
-        if not self.api_key:
-            raise ValueError("HELIUS_API_KEY environment variable not set")
+        """Initialize Helius API"""
+        api_key = os.getenv("HELIUS_API_KEY")
+        if not api_key:
+            raise APIKeyError("Helius")
             
-        self.base_url = "https://api.helius.xyz/v0"
-        self.api_manager = APIManager()
+        config = APIConfig(
+            api_key=api_key,
+            base_url="https://api.helius.xyz/v0",
+            max_retries=int(os.getenv("MAX_RETRIES", "3")),
+            retry_delay=int(os.getenv("RETRY_DELAY_MS", "1000")) / 1000,
+            timeout={"total": 15},
+            rate_limit={"default": 10}
+        )
+        super().__init__("helius", config)
+        self.use_mock = should_use_mock_data()
         
-    async def initialize(self):
-        """Initialize the API client"""
-        await self.api_manager.initialize()
-        
-    async def close(self):
-        """Close the API client"""
-        await self.api_manager.close()
-        
-    async def _make_request(
-        self,
-        method: str,
-        endpoint: str,
-        **kwargs
-    ) -> Any:
-        """Make an API request with rate limiting and retries"""
-        url = f"{self.base_url}/{endpoint}"
-        if "params" not in kwargs:
-            kwargs["params"] = {}
-        kwargs["params"]["api-key"] = self.api_key
-        
-        return await self.api_manager.request("helius", method, url, **kwargs)
-        
-    async def get_token_metadata(self, address: str) -> Dict:
-        """Get token metadata"""
-        try:
-            response = await self._make_request(
-                "GET",
-                f"token-metadata/{address}"
-            )
-            return response
-        except Exception as e:
-            logger.error(f"Error getting token metadata: {str(e)}")
-            raise
+    async def get_token_holders(self, token_address: str) -> List[Dict]:
+        """Get token holders for a given token"""
+        if self.use_mock:
+            return get_mock_holders(token_address)
             
-    async def get_token_holders(self, address: str) -> List[Dict]:
-        """Get token holders"""
-        try:
-            response = await self._make_request(
-                "GET",
-                f"token-holders/{address}"
-            )
-            return response.get("holders", [])
-        except Exception as e:
-            logger.error(f"Error getting token holders: {str(e)}")
-            raise
+        endpoint = f"/token-holders/{token_address}"
+        return await self._make_request("GET", endpoint)
+        
+    async def get_token_events(self, token_address: str, start_time: Optional[datetime] = None) -> List[Dict]:
+        """Get token events for a given token"""
+        if self.use_mock:
+            return get_mock_transactions(token_address)
             
-    async def get_token_transfers(
-        self,
-        address: str,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None
-    ) -> List[Dict]:
-        """Get token transfers"""
+        params = {"token": token_address}
+        if start_time:
+            params["since"] = (start_time - timedelta(days=30)).isoformat()
+            
+        endpoint = "/token-events"
+        return await self._make_request("GET", endpoint, params=params)
+        
+    async def get_token_deployer(self, token_address: str) -> Optional[str]:
+        """Get token deployer"""
+        if self.use_mock:
+            return get_mock_deployer(token_address)
+            
+        endpoint = f"/token-metadata/{token_address}"
+        result = await self._make_request("GET", endpoint)
+        return result.get("deployer")
+        
+    async def get_token_transactions(self, token_address: str, days: int = 30) -> List[Dict]:
+        """Get token transactions within a time range"""
         try:
-            params = {}
-            if start_time:
-                params["startTime"] = int(start_time.timestamp())
-            if end_time:
-                params["endTime"] = int(end_time.timestamp())
+            result = await self.get_token_events(token_address, start_time=datetime.now() - timedelta(days=days))
+            events = result.get("data", [])
+            if not events:
+                return []
                 
-            response = await self._make_request(
-                "GET",
-                f"token-transfers/{address}",
-                params=params
-            )
-            return response.get("transfers", [])
-        except Exception as e:
-            logger.error(f"Error getting token transfers: {str(e)}")
-            raise
+            transactions = []
+            for event in events:
+                try:
+                    tx = {
+                        "signature": event.get("signature"),
+                        "timestamp": event.get("timestamp"),
+                        "type": event.get("type"),
+                        "amount": float(event.get("amount", 0)),
+                        "from_address": event.get("source"),
+                        "to_address": event.get("destination"),
+                        "token_address": token_address
+                    }
+                    
+                    # Add swap-specific fields
+                    if event.get("type") == "SWAP":
+                        tx.update({
+                            "swap_from_amount": float(event.get("swapFromAmount", 0)),
+                            "swap_to_amount": float(event.get("swapToAmount", 0)),
+                            "swap_from_mint": event.get("swapFromMint"),
+                            "swap_to_mint": event.get("swapToMint")
+                        })
+                        
+                    transactions.append(tx)
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error processing transaction data: {str(e)}")
+                    continue
+                    
+            return transactions
             
-    async def get_token_events(
-        self,
-        address: str,
-        event_types: Optional[List[str]] = None
-    ) -> List[Dict]:
-        """Get token events"""
+        except Exception as e:
+            logger.error(f"Error getting token transactions: {str(e)}")
+            return []
+            
+    async def _get_solscan_holders(self, token_address: str) -> List[Dict]:
+        """Get token holders from Solscan"""
         try:
-            params = {}
-            if event_types:
-                params["eventTypes"] = event_types
-                
-            response = await self._make_request(
-                "GET",
-                f"token-events/{address}",
-                params=params
-            )
-            return response.get("events", [])
+            solscan = SolscanAPI()
+            await solscan.initialize()
+            try:
+                return await solscan.get_token_holders(token_address)
+            finally:
+                await solscan.close()
         except Exception as e:
-            logger.error(f"Error getting token events: {str(e)}")
-            raise
+            logger.error(f"Error in Solscan fallback for holders: {str(e)}")
+            return []
             
-    async def get_rate_limit_status(self) -> Dict:
-        """Get current rate limit status"""
-        return await self.api_manager.get_rate_limit_status("helius")
+    async def _get_solscan_events(self, token_address: str, days: int = 30) -> List[Dict]:
+        """Get token events from Solscan"""
+        try:
+            solscan = SolscanAPI()
+            await solscan.initialize()
+            try:
+                return await solscan.get_token_events(token_address, days)
+            finally:
+                await solscan.close()
+        except Exception as e:
+            logger.error(f"Error in Solscan fallback for events: {str(e)}")
+            return []
+            
+    async def _get_solscan_deployer(self, token_address: str) -> Optional[str]:
+        """Get token deployer from Solscan"""
+        try:
+            solscan = SolscanAPI()
+            await solscan.initialize()
+            try:
+                return await solscan.get_token_deployer(token_address)
+            finally:
+                await solscan.close()
+        except Exception as e:
+            logger.error(f"Error in Solscan fallback for deployer: {str(e)}")
+            return None

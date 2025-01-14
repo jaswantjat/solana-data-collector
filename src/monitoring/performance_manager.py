@@ -3,7 +3,7 @@ import logging
 import time
 import asyncio
 import psutil
-import aioredis
+import redis.asyncio as redis
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import numpy as np
-from prometheus_client import Counter, Gauge, Histogram, start_http_server
+from prometheus_client import Counter, Gauge, Histogram, start_http_server, REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -25,40 +25,63 @@ class PerformanceMetrics:
     error_rate: float
 
 class PerformanceManager:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
-        self.redis = None
-        self._init_metrics()
-        self.metrics_history = defaultdict(list)
-        self.cache = {}
-        self.cache_config = self._load_cache_config()
-        
-        # Initialize Prometheus metrics
-        self.response_time_histogram = Histogram(
-            'response_time_seconds',
-            'Request response time in seconds',
-            ['endpoint']
-        )
-        self.active_connections_gauge = Gauge(
-            'active_connections',
-            'Number of active connections'
-        )
-        self.cache_hit_rate_gauge = Gauge(
-            'cache_hit_rate',
-            'Cache hit rate percentage'
-        )
-        self.error_counter = Counter(
-            'error_count',
-            'Number of errors',
-            ['type']
-        )
-        
-        # Start Prometheus metrics server
-        start_http_server(8000)
-        
+        if not self._initialized:
+            self.redis = None
+            self._init_metrics()
+            self.metrics_history = defaultdict(list)
+            self.cache = {}
+            self.cache_config = self._load_cache_config()
+            
+            # Initialize Prometheus metrics
+            try:
+                self.response_time_histogram = Histogram(
+                    'response_time_seconds',
+                    'Request response time in seconds',
+                    ['endpoint']
+                )
+                self.active_connections_gauge = Gauge(
+                    'active_connections',
+                    'Number of active connections'
+                )
+                self.cache_hit_rate_gauge = Gauge(
+                    'cache_hit_rate',
+                    'Cache hit rate percentage'
+                )
+                self.error_counter = Counter(
+                    'error_count',
+                    'Number of errors',
+                    ['type']
+                )
+            except ValueError:
+                # If metrics already exist, get them from registry
+                for metric in REGISTRY.collect():
+                    if metric.name == 'response_time_seconds':
+                        self.response_time_histogram = metric
+                    elif metric.name == 'active_connections':
+                        self.active_connections_gauge = metric
+                    elif metric.name == 'cache_hit_rate':
+                        self.cache_hit_rate_gauge = metric
+                    elif metric.name == 'error_count':
+                        self.error_counter = metric
+
+            # Start Prometheus metrics server
+            start_http_server(8000)
+            
+            self._initialized = True
+            
     async def _init_redis(self):
         """Initialize Redis connection"""
         try:
-            self.redis = await aioredis.from_url(
+            self.redis = redis.from_url(
                 os.getenv("REDIS_URL", "redis://localhost"),
                 encoding="utf-8",
                 decode_responses=True

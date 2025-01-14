@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from aiohttp import ClientSession, ClientTimeout
 from asyncio import Lock, Queue
 import backoff
-from src.error_handling.error_manager import ErrorManager, ErrorConfig
+
+from ..error_handling.error_manager import ErrorManager, ErrorConfig
+from .base_api import APIConfig, BaseAPI
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -53,36 +56,41 @@ class APIRateLimiter:
             self._hour_start = current_time
             
     async def acquire(self):
-        """Acquire permission to make a request"""
+        """Acquire rate limit permission"""
         async with self.lock:
             await self._cleanup_old_requests()
             
             current_time = time.time()
-            time_since_last = current_time - self._last_request_time
             
-            # Check rate limits
-            if (self._minute_requests >= self.config.requests_per_minute or
-                self._hour_requests >= self.config.requests_per_hour or
-                time_since_last < 1/self.config.requests_per_second):
+            # Check second rate limit
+            if current_time - self._last_request_time < 1 / self.config.requests_per_second:
+                await asyncio.sleep(1 / self.config.requests_per_second)
                 
-                wait_time = max(
-                    1/self.config.requests_per_second - time_since_last,
-                    0 if self._minute_requests < self.config.requests_per_minute else self.config.retry_after,
-                    0 if self._hour_requests < self.config.requests_per_hour else 3600
-                )
-                
+            # Check minute rate limit
+            if self._minute_requests >= self.config.requests_per_minute:
+                wait_time = 60 - (current_time - self._minute_start)
                 if wait_time > 0:
-                    logger.warning(f"Rate limit reached, waiting {wait_time:.2f} seconds")
                     await asyncio.sleep(wait_time)
-                    
-            # Update counters
+                self._minute_requests = 0
+                self._minute_start = time.time()
+                
+            # Check hour rate limit
+            if self._hour_requests >= self.config.requests_per_hour:
+                wait_time = 3600 - (current_time - self._hour_start)
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+                self._hour_requests = 0
+                self._hour_start = time.time()
+                
+            # Record request
             self._last_request_time = time.time()
             self._minute_requests += 1
             self._hour_requests += 1
-            await self.request_times.put(self._last_request_time)
+            await self.request_times.put(time.time())
 
 class APIManager:
     def __init__(self):
+        # Initialize rate limiters
         self.rate_limiters: Dict[str, APIRateLimiter] = {
             "helius": APIRateLimiter(RateLimitConfig(
                 requests_per_second=10,
@@ -103,11 +111,65 @@ class APIManager:
                 requests_per_second=3,
                 requests_per_minute=100,
                 requests_per_hour=1000
+            )),
+            "birdeye": APIRateLimiter(RateLimitConfig(
+                requests_per_second=5,
+                requests_per_minute=150,
+                requests_per_hour=2000
+            )),
+            "jupiter": APIRateLimiter(RateLimitConfig(
+                requests_per_second=10,
+                requests_per_minute=300,
+                requests_per_hour=5000
+            )),
+            "coingecko": APIRateLimiter(RateLimitConfig(
+                requests_per_second=1,
+                requests_per_minute=30,
+                requests_per_hour=500
             ))
         }
         
-        self.session: Optional[ClientSession] = None
-        self.retry_codes = {408, 429, 500, 502, 503, 504}
+        # Initialize API configs
+        self.api_configs: Dict[str, APIConfig] = {
+            "helius": APIConfig(
+                api_key=os.getenv("HELIUS_API_KEY", ""),
+                base_url="https://api.helius.xyz/v0",
+                rate_limit=10
+            ),
+            "solscan": APIConfig(
+                api_key=os.getenv("SOLSCAN_API_KEY", ""),
+                base_url="https://public-api.solscan.io",
+                rate_limit=5
+            ),
+            "shyft": APIConfig(
+                api_key=os.getenv("SHYFT_API_KEY", ""),
+                base_url="https://api.shyft.to/sol/v1",
+                rate_limit=8
+            ),
+            "bitquery": APIConfig(
+                api_key=os.getenv("BITQUERY_API_KEY", ""),
+                base_url="https://graphql.bitquery.io",
+                rate_limit=3
+            ),
+            "birdeye": APIConfig(
+                api_key=os.getenv("BIRDEYE_API_KEY", ""),
+                base_url="https://public-api.birdeye.so",
+                rate_limit=5
+            ),
+            "jupiter": APIConfig(
+                api_key=os.getenv("JUPITER_API_KEY", ""),
+                base_url="https://price.jup.ag/v4",
+                rate_limit=10
+            ),
+            "coingecko": APIConfig(
+                api_key=os.getenv("COINGECKO_API_KEY", ""),
+                base_url="https://api.coingecko.com/api/v3",
+                rate_limit=1
+            )
+        }
+        
+        # Initialize API instances
+        self.apis: Dict[str, BaseAPI] = {}
         self.error_manager = ErrorManager()
         
         # Configure error handling for each service
@@ -125,91 +187,92 @@ class APIManager:
             
     async def initialize(self):
         """Initialize API manager"""
-        if not self.session:
-            timeout = ClientTimeout(total=30)
-            self.session = ClientSession(timeout=timeout)
+        # Initialize API instances
+        for service_name, config in self.api_configs.items():
+            self.apis[service_name] = BaseAPI(service_name, config)
+            await self.apis[service_name].initialize()
             
-        # Register fallback handlers
         self._register_fallbacks()
-            
+        
     async def close(self):
         """Close API manager"""
-        if self.session:
-            await self.session.close()
-            self.session = None
+        for api in self.apis.values():
+            await api.close()
             
     def _register_fallbacks(self):
         """Register fallback handlers for services"""
-        # Helius fallback
-        async def helius_fallback(*args, **kwargs):
-            logger.info("Using Helius fallback: Solscan API")
-            return await self.request("solscan", *args, **kwargs)
-        self.error_manager.register_fallback("helius", helius_fallback)
+        self.error_manager.register_fallback("helius", self.solscan_fallback)
+        self.error_manager.register_fallback("solscan", self.helius_fallback)
+        self.error_manager.register_fallback("shyft", self.solscan_fallback)
         
-        # Solscan fallback
-        async def solscan_fallback(*args, **kwargs):
-            logger.info("Using Solscan fallback: SHYFT API")
-            return await self.request("shyft", *args, **kwargs)
-        self.error_manager.register_fallback("solscan", solscan_fallback)
+    async def helius_fallback(self, *args, **kwargs):
+        """Fallback to Helius API"""
+        return await self.request("helius", *args, **kwargs)
         
-        # SHYFT fallback
-        async def shyft_fallback(*args, **kwargs):
-            logger.info("Using SHYFT fallback: cached data")
-            # Return cached data or None
-            return None
-        self.error_manager.register_fallback("shyft", shyft_fallback)
-            
+    async def solscan_fallback(self, *args, **kwargs):
+        """Fallback to Solscan API"""
+        return await self.request("solscan", *args, **kwargs)
+        
+    async def shyft_fallback(self, *args, **kwargs):
+        """Fallback to Shyft API"""
+        return await self.request("shyft", *args, **kwargs)
+        
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,
+        max_tries=3,
+        max_time=30
+    )
     async def request(
         self,
         api_name: str,
         method: str,
-        url: str,
+        endpoint: str,
         **kwargs
-    ) -> Any:
+    ) -> Dict:
         """Make an API request with rate limiting, retries, and circuit breaker"""
-        if not self.session:
-            await self.initialize()
-            
-        rate_limiter = self.rate_limiters.get(api_name)
-        if not rate_limiter:
+        if api_name not in self.apis:
             raise ValueError(f"Unknown API: {api_name}")
             
-        async def make_request():
-            await rate_limiter.acquire()
+        # Check circuit breaker
+        breaker = self.error_manager.circuit_breakers.get(api_name)
+        if breaker and breaker.state == "open":
+            logger.warning(f"Circuit breaker open for {api_name}, using fallback")
+            return await self.error_manager._handle_fallback(api_name, method, endpoint, **kwargs)
             
-            async with self.session.request(method, url, **kwargs) as response:
-                if response.status in self.retry_codes:
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after:
-                        await asyncio.sleep(int(retry_after))
-                    raise Exception(f"Retryable error: {response.status}")
-                    
-                response.raise_for_status()
-                return await response.json()
+        try:
+            # Acquire rate limit
+            await self.rate_limiters[api_name].acquire()
+            
+            # Make request
+            api = self.apis[api_name]
+            response = await api._make_request(method, endpoint, **kwargs)
+            
+            # Record success
+            if breaker:
+                breaker.record_success()
                 
-        return await self.error_manager.execute_with_fallback(
-            api_name,
-            make_request
-        )
+            return response
             
-    async def get_rate_limit_status(self, api_name: str) -> Dict:
+        except Exception as e:
+            logger.error(f"Error in {api_name} request: {str(e)}")
+            self.error_manager._record_error(api_name, e)
+            
+            if breaker:
+                breaker.record_failure()
+                
+            # Try fallback
+            return await self.error_manager._handle_fallback(api_name, method, endpoint, **kwargs)
+            
+    async def get_rate_limit_status(self, api_name: str) -> Dict[str, Any]:
         """Get current rate limit status"""
-        rate_limiter = self.rate_limiters.get(api_name)
-        if not rate_limiter:
+        if api_name not in self.rate_limiters:
             raise ValueError(f"Unknown API: {api_name}")
             
-        # Get both rate limit and error stats
-        rate_stats = {
-            "minute_requests": rate_limiter._minute_requests,
-            "hour_requests": rate_limiter._hour_requests,
-            "time_since_last": time.time() - rate_limiter._last_request_time
-        }
-        
-        error_stats = await self.error_manager.get_error_stats()
-        service_stats = await self.error_manager.analyze_errors()
-        
+        limiter = self.rate_limiters[api_name]
         return {
-            "rate_limits": rate_stats,
-            "errors": error_stats,
-            "service_health": service_stats
+            "minute_requests": limiter._minute_requests,
+            "hour_requests": limiter._hour_requests,
+            "minute_limit": limiter.config.requests_per_minute,
+            "hour_limit": limiter.config.requests_per_hour
         }
