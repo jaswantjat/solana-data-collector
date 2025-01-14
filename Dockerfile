@@ -10,29 +10,28 @@ ENV PORT=8000
 ENV PYTHONPATH=/app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libffi-dev \
-    python3-dev \
-    pkg-config \
-    libssl-dev \
-    python3.11-dev \
-    gcc \
-    g++ \
-    make \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        libffi-dev \
+        python3-dev \
+        pkg-config \
+        libssl-dev \
+        gcc \
+        g++ \
+        make \
+        git \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install build tools
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# Install cryptography first
-RUN pip install --no-cache-dir cryptography==41.0.7
-
-# Copy requirements and install dependencies
+# Copy requirements first
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
+# Install Python dependencies
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy the application code
 COPY . .
 
 # Run deployment verification
