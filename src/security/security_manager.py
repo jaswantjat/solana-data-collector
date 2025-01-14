@@ -13,29 +13,41 @@ from dataclasses import dataclass
 from fastapi import Request, HTTPException
 from functools import wraps
 
-# Try importing optional dependencies
+logger = logging.getLogger(__name__)
+
+# Set up basic logging
+logging.basicConfig(level=logging.INFO)
+
+# Try importing optional dependencies with detailed error handling
+FERNET_AVAILABLE = False
 try:
     from cryptography.fernet import Fernet
+    # Verify Fernet is actually working
+    test_key = Fernet.generate_key()
+    test_fernet = Fernet(test_key)
+    test_data = b"test"
+    test_fernet.encrypt(test_data)
     FERNET_AVAILABLE = True
-except ImportError:
-    FERNET_AVAILABLE = False
-    logging.warning("cryptography package not available. Encryption features will be disabled.")
+    logger.info("Cryptography module successfully loaded and verified")
+except ImportError as e:
+    logger.error(f"Failed to import cryptography module: {e}")
+except Exception as e:
+    logger.error(f"Cryptography module failed verification: {e}")
 
 try:
     import redis.asyncio as redis
     REDIS_AVAILABLE = True
+    logger.info("Redis module successfully loaded")
 except ImportError:
     REDIS_AVAILABLE = False
-    logging.warning("redis package not available. Rate limiting will use in-memory storage.")
-
-logger = logging.getLogger(__name__)
+    logger.warning("Redis package not available. Rate limiting will use in-memory storage.")
 
 @dataclass
 class RateLimitConfig:
     """Rate limit configuration"""
     requests: int
-    window: int  # in seconds
-    block_time: int  # in seconds
+    window: int
+    block_time: int
 
 class SecurityManager:
     """Manages security features including encryption, rate limiting, and API key validation"""
@@ -44,28 +56,30 @@ class SecurityManager:
         """Initialize security manager"""
         # Initialize encryption
         self.encryption_key = os.getenv("ENCRYPTION_KEY")
+        self.fernet = None
+        
         if FERNET_AVAILABLE and self.encryption_key:
             try:
                 if isinstance(self.encryption_key, str):
                     self.encryption_key = self.encryption_key.encode()
                 self.fernet = Fernet(self.encryption_key)
+                logger.info("Fernet encryption initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Fernet: {str(e)}")
-                self.fernet = None
         else:
-            self.fernet = None
+            logger.warning("Encryption disabled: cryptography module not available or no encryption key")
             
         # Initialize rate limiting
         redis_url = os.getenv("REDIS_URL", "redis://localhost")
+        self.redis = None
+        
         if REDIS_AVAILABLE:
             try:
                 self.redis = redis.from_url(redis_url)
+                logger.info("Redis connection initialized")
             except Exception as e:
                 logger.warning(f"Failed to connect to Redis: {str(e)}")
-                self.redis = None
-        else:
-            self.redis = None
-            
+        
         # Rate limit configurations
         self.rate_limits = {
             "default": RateLimitConfig(100, 60, 300),  # 100 requests per minute, 5 min block
@@ -82,7 +96,7 @@ class SecurityManager:
     def _generate_encryption_key(self) -> bytes:
         """Generate new encryption key"""
         if not FERNET_AVAILABLE:
-            logger.warning("Cannot generate encryption key: cryptography package not available")
+            logger.warning("Cannot generate encryption key: cryptography module not available")
             return os.urandom(32)
         return Fernet.generate_key()
         
@@ -94,27 +108,25 @@ class SecurityManager:
     def encrypt_data(self, data: str) -> Optional[str]:
         """Encrypt sensitive data"""
         if not self.fernet:
-            logger.warning("Encryption not available")
+            logger.warning("Encryption attempted but Fernet not available")
             return data
-            
         try:
             return self.fernet.encrypt(data.encode()).decode()
         except Exception as e:
             logger.error(f"Encryption failed: {str(e)}")
             return None
-            
+
     def decrypt_data(self, encrypted_data: str) -> Optional[str]:
         """Decrypt sensitive data"""
         if not self.fernet:
-            logger.warning("Decryption not available")
+            logger.warning("Decryption attempted but Fernet not available")
             return encrypted_data
-            
         try:
             return self.fernet.decrypt(encrypted_data.encode()).decode()
         except Exception as e:
             logger.error(f"Decryption failed: {str(e)}")
             return None
-            
+
     async def check_rate_limit(self, key: str, limit_type: str = "default") -> bool:
         """Check if request is within rate limits"""
         config = self.rate_limits.get(limit_type, self.rate_limits["default"])

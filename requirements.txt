@@ -1,6 +1,13 @@
+# Build dependencies
+wheel==0.42.0
+setuptools>=69.0.3
+
 # Core dependencies
-cffi>=1.15.1
+cffi==1.15.1
 cryptography==41.0.7
+pycparser==2.21
+
+# Web Framework
 fastapi==0.109.0
 uvicorn[standard]==0.25.0
 pydantic==2.5.3
