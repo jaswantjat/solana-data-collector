@@ -24,6 +24,10 @@ RUN apt-get update && \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser && \
+    chown -R appuser:appuser /app
+
 # Copy requirements first
 COPY requirements.txt .
 
@@ -33,6 +37,10 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
 
 # Copy the application code
 COPY . .
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
 
 # Run deployment verification
 RUN python scripts/deploy_verify.py
