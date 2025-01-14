@@ -1,10 +1,10 @@
 # Core dependencies
-wheel==0.42.0
 setuptools>=69.0.3
+wheel>=0.42.0
 
-# Security dependencies
-cffi==1.15.1
+# Security dependencies (install first)
 pycparser==2.21
+cffi==1.15.1
 cryptography==41.0.7
 
 # Web Framework
@@ -35,14 +35,5 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 
-# Monitoring and System
+# Monitoring
 psutil==5.9.7
-
-# Development and Testing
-pytest==7.4.4
-pytest-asyncio==0.23.3
-pytest-cov==4.1.0
-black==23.12.1
-isort==5.13.2
-mypy==1.8.0
-ruff==0.1.11
