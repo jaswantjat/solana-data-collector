@@ -1,8 +1,8 @@
-# Build dependencies
+# Core dependencies
 wheel==0.42.0
 setuptools>=69.0.3
 
-# Core dependencies
+# Security dependencies
 cffi==1.15.1
 pycparser==2.21
 cryptography==41.0.7
