@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from fastapi import Request, HTTPException
 from functools import wraps
 
+# Try importing optional dependencies
 try:
     from cryptography.fernet import Fernet
     FERNET_AVAILABLE = True
@@ -44,13 +45,19 @@ class SecurityManager:
         # Initialize encryption
         self.encryption_key = os.getenv("ENCRYPTION_KEY")
         if FERNET_AVAILABLE and self.encryption_key:
-            self.fernet = Fernet(self.encryption_key.encode() if isinstance(self.encryption_key, str) else self.encryption_key)
+            try:
+                if isinstance(self.encryption_key, str):
+                    self.encryption_key = self.encryption_key.encode()
+                self.fernet = Fernet(self.encryption_key)
+            except Exception as e:
+                logger.error(f"Failed to initialize Fernet: {str(e)}")
+                self.fernet = None
         else:
             self.fernet = None
             
         # Initialize rate limiting
+        redis_url = os.getenv("REDIS_URL", "redis://localhost")
         if REDIS_AVAILABLE:
-            redis_url = os.getenv("REDIS_URL", "redis://localhost")
             try:
                 self.redis = redis.from_url(redis_url)
             except Exception as e:
