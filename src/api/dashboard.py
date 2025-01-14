@@ -30,6 +30,7 @@ from ..database.models import Token, TokenPrice, TokenHolder, TokenTransaction, 
 from ..events.event_manager import event_manager
 from .wallet import router as wallet_router
 from .alerts import router as alerts_router
+from .health import router as health_router
 from ..collectors.background_tasks import init_background_tasks
 
 # Configure logging
@@ -255,6 +256,7 @@ async def health_check():
 # Include routers
 app.include_router(wallet_router, prefix="/api/wallet", tags=["wallet"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(health_router, prefix="/api/health", tags=["health"])
 
 if __name__ == "__main__":
     import uvicorn

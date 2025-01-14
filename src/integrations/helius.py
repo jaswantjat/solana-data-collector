@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 class HeliusAPI(BaseAPI):
     """Helius API integration"""
     
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         """Initialize Helius API"""
-        api_key = os.getenv("HELIUS_API_KEY")
+        api_key = api_key or os.getenv("HELIUS_API_KEY")
         if not api_key:
             raise APIKeyError("Helius")
             
@@ -41,6 +41,17 @@ class HeliusAPI(BaseAPI):
         )
         super().__init__("helius", config)
         self.use_mock = should_use_mock_data()
+        
+    async def check_health(self) -> bool:
+        """Check API health by making a simple request"""
+        try:
+            # Get balance of a known token (USDC)
+            endpoint = "/token-holders/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            response = await self._make_request("GET", endpoint, params={"limit": 1})
+            return bool(response and isinstance(response, list))
+        except Exception as e:
+            logger.error(f"Helius API health check failed: {str(e)}")
+            raise
         
     async def get_token_holders(self, token_address: str) -> List[Dict]:
         """Get token holders for a given token"""

@@ -3,9 +3,22 @@ import os
 import logging
 from typing import Dict, Any
 from dotenv import load_dotenv
+from urllib.parse import quote_plus
 
 # Load environment variables
 load_dotenv()
+
+# Database Configuration
+DB_TYPE = os.getenv("DB_TYPE", "sqlite")  # sqlite or postgresql
+if DB_TYPE == "sqlite":
+    DATABASE_URL = "sqlite:///solana_data_collector.db"
+else:
+    DB_USER = os.getenv("DB_USER", "postgres")
+    DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+    DB_HOST = os.getenv("DB_HOST", "localhost")
+    DB_PORT = os.getenv("DB_PORT", "5432")
+    DB_NAME = os.getenv("DB_NAME", "solana_data_collector")
+    DATABASE_URL = f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 # API Keys and URLs
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY")
@@ -51,12 +64,6 @@ API_BURST_LIMIT = {
     "shyft": int(os.getenv("SHYFT_BURST_LIMIT", "20")),
     "default": int(os.getenv("DEFAULT_BURST_LIMIT", "10"))
 }
-
-# Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost/solana_monitor")
-DATABASE_POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "10"))
-DATABASE_MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "20"))
-DATABASE_POOL_TIMEOUT = int(os.getenv("DATABASE_POOL_TIMEOUT", "30"))
 
 # Monitoring Settings
 MONITORING_INTERVAL = int(os.getenv("MONITORING_INTERVAL", "10"))  # seconds
@@ -153,3 +160,63 @@ ANALYSIS_SETTINGS = {
     "social_impact_threshold": float(os.getenv("SOCIAL_IMPACT_THRESHOLD", "0.7")),
     "market_impact_threshold": float(os.getenv("MARKET_IMPACT_THRESHOLD", "0.4"))
 }
+
+# Monitoring Configuration
+MONITOR_SETTINGS = {
+    "poll_interval": int(os.getenv("MONITOR_POLL_INTERVAL", "60")),  # seconds
+    "batch_size": int(os.getenv("MONITOR_BATCH_SIZE", "100")),
+    "max_retries": int(os.getenv("MONITOR_MAX_RETRIES", "3")),
+    "retry_delay": int(os.getenv("MONITOR_RETRY_DELAY", "5")),  # seconds
+    "timeout": int(os.getenv("MONITOR_TIMEOUT", "30"))  # seconds
+}
+
+# Analysis Configuration
+ANALYSIS_CONFIG = {
+    "holder_threshold": int(os.getenv("ANALYSIS_HOLDER_THRESHOLD", "100")),
+    "volume_threshold": float(os.getenv("ANALYSIS_VOLUME_THRESHOLD", "10000")),
+    "price_change_threshold": float(os.getenv("ANALYSIS_PRICE_CHANGE_THRESHOLD", "0.1")),
+    "risk_score_threshold": float(os.getenv("ANALYSIS_RISK_SCORE_THRESHOLD", "0.7")),
+    "max_analysis_time": int(os.getenv("ANALYSIS_MAX_TIME", "300"))  # seconds
+}
+
+# Notification Configuration
+NOTIFICATION_SETTINGS = {
+    "enabled": os.getenv("NOTIFICATIONS_ENABLED", "true").lower() == "true",
+    "batch_size": int(os.getenv("NOTIFICATION_BATCH_SIZE", "10")),
+    "interval": int(os.getenv("NOTIFICATION_INTERVAL", "300")),  # seconds
+    "channels": os.getenv("NOTIFICATION_CHANNELS", "discord,twitter").split(","),
+    "priority_levels": {
+        "high": float(os.getenv("NOTIFICATION_PRIORITY_HIGH", "0.8")),
+        "medium": float(os.getenv("NOTIFICATION_PRIORITY_MEDIUM", "0.5")),
+        "low": float(os.getenv("NOTIFICATION_PRIORITY_LOW", "0.2"))
+    }
+}
+
+# Cache Configuration
+CACHE_CONFIG = {
+    "enabled": os.getenv("CACHE_ENABLED", "true").lower() == "true",
+    "ttl": int(os.getenv("CACHE_TTL", "3600")),  # seconds
+    "max_size": int(os.getenv("CACHE_MAX_SIZE", "1000")),
+    "cleanup_interval": int(os.getenv("CACHE_CLEANUP_INTERVAL", "300"))  # seconds
+}
+
+# Recovery Configuration
+RECOVERY_CONFIG = {
+    "max_retries": int(os.getenv("RECOVERY_MAX_RETRIES", "3")),
+    "retry_delay": int(os.getenv("RECOVERY_RETRY_DELAY", "5")),  # seconds
+    "backoff_factor": float(os.getenv("RECOVERY_BACKOFF_FACTOR", "2.0")),
+    "timeout": int(os.getenv("RECOVERY_TIMEOUT", "30"))  # seconds
+}
+
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format=LOG_FORMAT,
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+
+# Create logger
+logger = logging.getLogger(__name__)

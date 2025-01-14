@@ -3,20 +3,27 @@ services:
   - type: web
     name: solana-data-collector
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m src.main
+    region: oregon  # Specify region
+    plan: starter  # Specify plan
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+      python scripts/deploy_verify.py
+    startCommand: uvicorn src.api.dashboard:app --host 0.0.0.0 --port $PORT
     autoDeploy: false  # Disable auto-deploy for controlled updates
     healthCheckPath: /api/health
     numInstances: 1
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.11.3
       - key: LOG_LEVEL
         value: INFO
       - key: MONITORING_INTERVAL
         value: 10
       - key: MAX_CONCURRENT_TASKS
         value: 5
+      - key: PORT  # Add PORT environment variable
+        value: 8000
       # Secure environment variables
       - key: DATABASE_URL
         sync: false

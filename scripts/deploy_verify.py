@@ -4,197 +4,210 @@ import sys
 import asyncio
 import logging
 from datetime import datetime
-import requests
+import aiohttp
 import psutil
 import json
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.database.connection import db_manager
+from src.integrations.helius import HeliusAPI
+from src.integrations.shyft import ShyftAPI
+from src.integrations.bitquery import BitqueryAPI
+from src.config import (
+    HELIUS_API_KEY,
+    SHYFT_API_KEY,
+    DATABASE_URL,
+    LOG_LEVEL,
+    LOG_FORMAT
+)
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=getattr(logging, LOG_LEVEL),
+    format=LOG_FORMAT
 )
 logger = logging.getLogger(__name__)
 
 class DeploymentVerifier:
     """Verifies deployment status and system health"""
     
-    def __init__(self, base_url: str):
-        self.base_url = base_url
+    def __init__(self):
         self.checks_passed = 0
         self.checks_failed = 0
+        self.results = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "pending",
+            "checks": {},
+            "errors": []
+        }
         
     async def verify_deployment(self) -> bool:
         """Run all deployment verification checks"""
         try:
             logger.info("Starting deployment verification...")
             
-            # Check API health
-            if not await self.check_api_health():
+            # Check environment variables
+            if not await self.check_environment():
                 return False
                 
             # Check database connection
             if not await self.check_database():
                 return False
                 
-            # Check component status
-            if not await self.check_components():
+            # Check API integrations
+            if not await self.check_api_integrations():
                 return False
                 
-            # Check monitoring
-            if not await self.check_monitoring():
+            # Check system resources
+            if not await self.check_system_resources():
                 return False
                 
-            # Check performance
-            if not await self.check_performance():
-                return False
-                
-            logger.info(f"Verification complete. Passed: {self.checks_passed}, Failed: {self.checks_failed}")
+            # Save results
+            self.save_results()
+            
+            # Log summary
+            logger.info(f"Verification complete: {self.checks_passed} passed, {self.checks_failed} failed")
             return self.checks_failed == 0
             
         except Exception as e:
             logger.error(f"Verification failed: {str(e)}")
+            self.results["errors"].append(str(e))
             return False
             
-    async def check_api_health(self) -> bool:
-        """Check API health endpoint"""
-        try:
-            response = requests.get(f"{self.base_url}/api/health")
-            if response.status_code == 200:
-                health_data = response.json()
-                if health_data["status"] == "healthy":
-                    logger.info("✅ API health check passed")
-                    self.checks_passed += 1
-                    return True
-                    
-            logger.error("❌ API health check failed")
+    async def check_environment(self) -> bool:
+        """Check required environment variables"""
+        required_vars = [
+            "HELIUS_API_KEY",
+            "SHYFT_API_KEY",
+            "DATABASE_URL",
+            "JWT_SECRET"
+        ]
+        
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        
+        self.results["checks"]["environment"] = {
+            "status": "passed" if not missing_vars else "failed",
+            "missing_vars": missing_vars
+        }
+        
+        if missing_vars:
             self.checks_failed += 1
+            logger.error(f"Missing environment variables: {', '.join(missing_vars)}")
             return False
             
-        except Exception as e:
-            logger.error(f"❌ API health check error: {str(e)}")
-            self.checks_failed += 1
-            return False
-            
+        self.checks_passed += 1
+        return True
+        
     async def check_database(self) -> bool:
-        """Check database connection"""
+        """Check database connection and migrations"""
         try:
-            response = requests.get(f"{self.base_url}/api/health")
-            if response.status_code == 200:
-                health_data = response.json()
-                if health_data["components"]["database"] == "healthy":
-                    logger.info("✅ Database check passed")
-                    self.checks_passed += 1
-                    return True
-                    
-            logger.error("❌ Database check failed")
-            self.checks_failed += 1
-            return False
+            # Test connection
+            async with db_manager.session() as session:
+                await session.execute("SELECT 1")
             
-        except Exception as e:
-            logger.error(f"❌ Database check error: {str(e)}")
-            self.checks_failed += 1
-            return False
-            
-    async def check_components(self) -> bool:
-        """Check all system components"""
-        try:
-            response = requests.get(f"{self.base_url}/api/health")
-            if response.status_code == 200:
-                health_data = response.json()
-                components = health_data["components"]
-                
-                all_healthy = all(
-                    status == "healthy" for status in components.values()
-                )
-                
-                if all_healthy:
-                    logger.info("✅ Component check passed")
-                    self.checks_passed += 1
-                    return True
-                    
-            logger.error("❌ Component check failed")
-            self.checks_failed += 1
-            return False
-            
-        except Exception as e:
-            logger.error(f"❌ Component check error: {str(e)}")
-            self.checks_failed += 1
-            return False
-            
-    async def check_monitoring(self) -> bool:
-        """Check monitoring systems"""
-        try:
-            # Check metrics endpoint
-            metrics_response = requests.get(f"{self.base_url}/api/system/metrics")
-            if metrics_response.status_code != 200:
-                logger.error("❌ Metrics check failed")
-                self.checks_failed += 1
-                return False
-                
-            # Check alerts endpoint
-            alerts_response = requests.get(f"{self.base_url}/api/alerts/status")
-            if alerts_response.status_code != 200:
-                logger.error("❌ Alerts check failed")
-                self.checks_failed += 1
-                return False
-                
-            logger.info("✅ Monitoring check passed")
+            self.results["checks"]["database"] = {
+                "status": "passed",
+                "url": DATABASE_URL.split("@")[-1]  # Hide credentials
+            }
             self.checks_passed += 1
             return True
             
         except Exception as e:
-            logger.error(f"❌ Monitoring check error: {str(e)}")
             self.checks_failed += 1
+            logger.error(f"Database check failed: {str(e)}")
+            self.results["checks"]["database"] = {
+                "status": "failed",
+                "error": str(e)
+            }
             return False
             
-    async def check_performance(self) -> bool:
-        """Check system performance"""
-        try:
-            response = requests.get(f"{self.base_url}/api/system/metrics")
-            if response.status_code == 200:
-                metrics = response.json()
+    async def check_api_integrations(self) -> bool:
+        """Check API integrations"""
+        apis = {
+            "helius": HeliusAPI(HELIUS_API_KEY),
+            "shyft": ShyftAPI(SHYFT_API_KEY)
+        }
+        
+        all_passed = True
+        self.results["checks"]["apis"] = {}
+        
+        for name, api in apis.items():
+            try:
+                await api.check_health()
+                self.results["checks"]["apis"][name] = {
+                    "status": "passed"
+                }
+                self.checks_passed += 1
+            except Exception as e:
+                all_passed = False
+                self.checks_failed += 1
+                logger.error(f"{name.capitalize()} API check failed: {str(e)}")
+                self.results["checks"]["apis"][name] = {
+                    "status": "failed",
+                    "error": str(e)
+                }
                 
-                # Check CPU usage
-                if metrics["cpu_usage"] > 80:
-                    logger.warning("⚠️ High CPU usage detected")
-                    
-                # Check memory usage
-                if metrics["memory_usage"] > 80:
-                    logger.warning("⚠️ High memory usage detected")
-                    
-                # Check response time
-                if metrics["response_time"] > 1000:  # 1 second
-                    logger.warning("⚠️ High response time detected")
-                    
-                logger.info("✅ Performance check passed")
+        return all_passed
+        
+    async def check_system_resources(self) -> bool:
+        """Check system resources"""
+        try:
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            
+            checks = {
+                "memory": memory.percent < 90,
+                "disk": disk.percent < 90,
+                "cpu": psutil.cpu_percent(interval=1) < 90
+            }
+            
+            self.results["checks"]["resources"] = {
+                "status": "passed" if all(checks.values()) else "failed",
+                "memory_used": f"{memory.percent}%",
+                "disk_used": f"{disk.percent}%",
+                "cpu_used": f"{psutil.cpu_percent()}%"
+            }
+            
+            if all(checks.values()):
                 self.checks_passed += 1
                 return True
+            else:
+                self.checks_failed += 1
+                return False
                 
-            logger.error("❌ Performance check failed")
+        except Exception as e:
             self.checks_failed += 1
+            logger.error(f"Resource check failed: {str(e)}")
+            self.results["checks"]["resources"] = {
+                "status": "failed",
+                "error": str(e)
+            }
             return False
             
+    def save_results(self):
+        """Save verification results"""
+        try:
+            self.results["status"] = "success" if self.checks_failed == 0 else "failed"
+            
+            # Save to file
+            output_file = "deployment_verification.json"
+            with open(output_file, "w") as f:
+                json.dump(self.results, f, indent=2)
+                
+            logger.info(f"Results saved to {output_file}")
+            
         except Exception as e:
-            logger.error(f"❌ Performance check error: {str(e)}")
-            self.checks_failed += 1
-            return False
+            logger.error(f"Failed to save results: {str(e)}")
 
 async def main():
     """Main entry point"""
-    if len(sys.argv) < 2:
-        print("Usage: python deploy_verify.py <base_url>")
-        sys.exit(1)
-        
-    base_url = sys.argv[1]
-    verifier = DeploymentVerifier(base_url)
-    
-    if await verifier.verify_deployment():
-        logger.info("🎉 Deployment verification successful!")
-        sys.exit(0)
-    else:
-        logger.error("❌ Deployment verification failed!")
-        sys.exit(1)
+    verifier = DeploymentVerifier()
+    success = await verifier.verify_deployment()
+    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     asyncio.run(main())

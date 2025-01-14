@@ -310,3 +310,18 @@ class ShyftAPI:
         except Exception as e:
             logger.error(f"Error fetching token info: {str(e)}")
             return {}
+            
+    async def check_health(self) -> bool:
+        """Check API health by making a simple request"""
+        try:
+            # Get info about a known token (USDC)
+            endpoint = "token/get_info"
+            response = await self._make_request(
+                "GET",
+                endpoint,
+                params={"network": "mainnet-beta", "token_address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"}
+            )
+            return bool(response and isinstance(response, dict) and response.get("success"))
+        except Exception as e:
+            logger.error(f"Shyft API health check failed: {str(e)}")
+            raise
