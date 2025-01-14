@@ -1,59 +1,51 @@
-# Use Python 3.11.3 slim image
-FROM python:3.11.3-slim
-
-# Set working directory
-WORKDIR /app
+# Use Python 3.10 slim as base image
+FROM python:3.10-slim
 
 # Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PORT=8000
-ENV PYTHONPATH=/app
-ENV PYTHONWARNINGS=ignore
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PORT=8000 \
+    PYTHONWARNINGS=ignore
+
+# Create and set working directory
+WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        build-essential \
-        python3.11-dev \
-        python3.11-venv \
-        libffi-dev \
-        libssl-dev \
-        pkg-config \
-        gcc \
-        g++ \
-        make \
-        git \
-    && apt-get clean \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-dev \
+    libffi-dev \
+    libssl-dev \
+    pkg-config \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Create and activate virtual environment
-RUN python3.11 -m venv /opt/venv && \
-    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+# Create a virtual environment and activate it
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Install build dependencies first
+# Upgrade pip, setuptools and wheel in the virtual environment
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install core dependencies first
 COPY requirements.txt .
-RUN /opt/venv/bin/pip install --no-cache-dir \
-        wheel==0.42.0 \
-        setuptools>=69.0.3 \
-        cffi==1.15.1 \
-        pycparser==2.21
+RUN pip install --no-cache-dir \
+    cffi==1.15.1 \
+    pycparser==2.21 \
+    cryptography==41.0.7
 
-# Install cryptography separately
-RUN /opt/venv/bin/pip install --no-cache-dir cryptography==41.0.7
+# Install remaining dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install remaining requirements
-RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
-
-# Copy the application code
+# Copy application code
 COPY . .
 
-# Verify installation
-RUN echo "Verifying cryptography installation..." && \
-    /opt/venv/bin/python -c "from cryptography.fernet import Fernet; print('Cryptography installation verified')"
+# Create a non-root user
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
 
-# Expose port
-EXPOSE 8000
+# Verify cryptography installation
+RUN python scripts/verify_install.py
 
 # Run the application
-CMD ["/opt/venv/bin/python", "-m", "uvicorn", "src.api.dashboard:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -13,12 +13,11 @@ from dataclasses import dataclass
 from fastapi import Request, HTTPException
 from functools import wraps
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Set up basic logging
-logging.basicConfig(level=logging.INFO)
-
-# Try importing optional dependencies with detailed error handling
+# Try importing cryptography with detailed error handling
 FERNET_AVAILABLE = False
 try:
     from cryptography.fernet import Fernet
@@ -31,9 +30,12 @@ try:
     logger.info("Cryptography module successfully loaded and verified")
 except ImportError as e:
     logger.error(f"Failed to import cryptography module: {e}")
+    logger.error("Please ensure cryptography is installed: pip install cryptography==41.0.7")
 except Exception as e:
     logger.error(f"Cryptography module failed verification: {e}")
+    logger.error("Cryptography module installed but not working correctly")
 
+# Try importing Redis with error handling
 try:
     import redis.asyncio as redis
     REDIS_AVAILABLE = True
@@ -66,6 +68,7 @@ class SecurityManager:
                 logger.info("Fernet encryption initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Fernet: {str(e)}")
+                logger.error("Encryption will be disabled")
         else:
             logger.warning("Encryption disabled: cryptography module not available or no encryption key")
             
