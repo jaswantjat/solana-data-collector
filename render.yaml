@@ -2,11 +2,12 @@ services:
   # Main web service
   - type: web
     name: solana-data-collector
-    env: docker
+    runtime: docker
     region: oregon
     plan: starter
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: Dockerfile
     dockerContext: .
+    branch: deployment/2025-01-14
     autoDeploy: false
     healthCheckPath: /api/health
     numInstances: 1
@@ -14,35 +15,6 @@ services:
       - key: PYTHONPATH
         value: /app
       - key: PYTHON_VERSION
-        value: 3.11.3
+        value: "3.11.3"
       - key: LOG_LEVEL
         value: INFO
-      - key: MONITORING_INTERVAL
-        value: 10
-      - key: MAX_CONCURRENT_TASKS
-        value: 5
-      - key: PORT
-        value: 8000
-      # Secure environment variables
-      - key: DATABASE_URL
-        sync: false
-      - key: HELIUS_API_KEY
-        sync: false
-      - key: TWITTER_API_KEY
-        sync: false
-      - key: DISCORD_WEBHOOK_URL
-        sync: false
-      - key: SOLSCAN_API_KEY
-        sync: false
-      - key: SHYFT_API_KEY
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 10
-    scaling:
-      minInstances: 1
-      maxInstances: 3
-      targetMemoryPercent: 80
