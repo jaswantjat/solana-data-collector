@@ -6,10 +6,19 @@ services:
     region: oregon
     plan: starter
     buildCommand: |
-      apt-get update && apt-get install -y build-essential libffi-dev python3-dev
+      # Update and install system dependencies
+      apt-get update
+      apt-get install -y build-essential libffi-dev python3-dev pkg-config libssl-dev
+      
+      # Upgrade pip and install wheel
       python -m pip install --upgrade pip
-      pip install wheel
+      pip install wheel setuptools
+      
+      # Install Python packages with explicit cryptography installation
+      pip install cryptography==41.0.7
       pip install -r requirements.txt
+      
+      # Verify deployment
       python scripts/deploy_verify.py
     startCommand: uvicorn src.api.dashboard:app --host 0.0.0.0 --port $PORT
     autoDeploy: false
@@ -49,7 +58,6 @@ services:
       minInstances: 1
       maxInstances: 3
       targetMemoryPercent: 80
-      targetCPUPercent: 80
     metrics:
       - type: cpu
       - type: memory
