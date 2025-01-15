@@ -1,3 +1,4 @@
+"""FastAPI server for Solana Data Collector."""
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -50,45 +51,36 @@ class BlacklistInfo(BaseModel):
     recent_additions: List[Dict]
 
 @app.get("/")
-async def root():
-    return {"status": "online", "service": "Solana Data Collector"}
+def root():
+    """Root endpoint."""
+    return {"message": "Solana Data Collector API is running"}
 
 @app.post("/analyze/token")
 async def analyze_token(request: TokenAnalysisRequest):
-    """
-    Analyze a Solana token for suspicious activity
-    """
+    """Analyze a Solana token for suspicious activity."""
     try:
-        # Check if token's deployer is blacklisted
-        token_data = await get_token_data(request.token_address)
-        deployer_address = token_data.get('deployer_data', {}).get('address')
+        # Initialize collectors
+        token_collector = TokenLaunchCollector()
+        dex_collector = DexTradeCollector()
         
-        if deployer_address and blacklist_manager.is_blacklisted(deployer_address):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Token deployer {deployer_address} is blacklisted"
-            )
+        # Collect token data
+        token_data = await token_collector.collect_token_data(request.token_address)
+        trade_data = await dex_collector.collect_trade_data(request.token_address)
         
-        # Perform analysis
-        analysis_result = await suspicious_analyzer.analyze_volume_patterns(
-            token_data.get('trading_data', {}).get('trades', [])
+        # Analyze for suspicious activity
+        analysis = suspicious_analyzer.analyze_token(
+            token_data=token_data,
+            trade_data=trade_data,
+            include_holder_analysis=request.include_holder_analysis,
+            include_twitter_analysis=request.include_twitter_analysis
         )
-        
-        # Update blacklist if suspicious
-        if analysis_result['is_suspicious']:
-            await blacklist_manager.add_to_blacklist(
-                deployer_address,
-                "Suspicious token activity detected",
-                {
-                    "token_address": request.token_address,
-                    "reasons": analysis_result['reasons']
-                }
-            )
         
         return {
             "token_address": request.token_address,
-            "analysis_result": analysis_result,
-            "token_data": token_data
+            "analysis_results": analysis,
+            "risk_score": analysis.get("risk_score", 0),
+            "warnings": analysis.get("warnings", []),
+            "recommendations": analysis.get("recommendations", [])
         }
         
     except Exception as e:
@@ -96,20 +88,16 @@ async def analyze_token(request: TokenAnalysisRequest):
 
 @app.post("/analyze/wallet")
 async def analyze_wallet(request: WalletAnalysisRequest):
-    """
-    Analyze a wallet's trading history and behavior
-    """
+    """Analyze a wallet's trading history and behavior."""
     try:
-        wallet_analyzer = WalletAnalyzer()
-        analysis_result = await wallet_analyzer.analyze_wallet(request.wallet_address)
-        
-        # Check if wallet is in backlogs
-        backlog_info = blacklist_manager.get_wallet_info(request.wallet_address)
+        analyzer = WalletAnalyzer()
+        analysis = await analyzer.analyze_wallet(request.wallet_address)
         
         return {
             "wallet_address": request.wallet_address,
-            "analysis_result": analysis_result,
-            "backlog_info": backlog_info
+            "analysis_results": analysis,
+            "risk_score": analysis.get("risk_score", 0),
+            "suspicious_transactions": analysis.get("suspicious_transactions", [])
         }
         
     except Exception as e:
@@ -117,50 +105,46 @@ async def analyze_wallet(request: WalletAnalysisRequest):
 
 @app.get("/blacklist/stats")
 async def get_blacklist_stats():
-    """
-    Get statistics about blacklisted addresses
-    """
+    """Get statistics about blacklisted addresses."""
     try:
-        report = await blacklist_manager.generate_report()
-        return report
-        
+        stats = blacklist_manager.get_stats()
+        return BlacklistInfo(**stats)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/monitor/status")
 async def get_monitor_status():
-    """
-    Get current monitoring status
-    """
+    """Get current monitoring status."""
     try:
-        # Get statistics about current monitoring
-        return {
-            "status": "active",
-            "tokens_monitored": 0,  # Implement counter
-            "alerts_today": 0,  # Implement counter
-            "last_update": "2024-01-12T16:44:14+05:30"
-        }
+        # Get status from various collectors
+        token_status = TokenLaunchCollector().get_status()
+        dex_status = DexTradeCollector().get_status()
         
+        return {
+            "token_monitor": token_status,
+            "dex_monitor": dex_status,
+            "last_update": str(asyncio.get_event_loop().time())
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def get_token_data(token_address: str) -> Dict:
-    """
-    Gather all relevant data for a token
-    """
-    # Implement token data collection
-    # This should aggregate data from various collectors
-    pass
+@app.get("/token/{token_address}")
+async def get_token_data(token_address: str):
+    """Gather all relevant data for a token."""
+    try:
+        token_collector = TokenLaunchCollector()
+        return await token_collector.collect_token_data(token_address)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def start():
-    """
-    Start the FastAPI server
-    """
+    """Start the FastAPI server."""
+    port = int(os.environ.get("PORT", 10000))  # Render's default port is 10000
     uvicorn.run(
-        "server:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
+        app,
+        host="0.0.0.0",  # Required for Render
+        port=port,
+        log_level="info"
     )
 
 if __name__ == "__main__":

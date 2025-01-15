@@ -12,6 +12,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import settings
+from src.config.database import get_connection_string
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +27,14 @@ class DatabaseManager:
     def _create_connection_url(self) -> URL:
         """Create SQLAlchemy URL object for database connection."""
         try:
-            # Format the host correctly for Supabase
-            host = settings.PGHOST.replace('db.', '')
-            logger.info(f"Using database host: {host}")
-
-            # Parse the components from environment variables
-            components = {
-                'drivername': 'postgresql+psycopg2',
-                'username': settings.PGUSER,
-                'password': settings.PGPASSWORD,
-                'host': host,
-                'port': settings.PGPORT,
-                'database': settings.PGDATABASE,
-                'query': {
-                    'sslmode': settings.PGSSLMODE,
-                    'connect_timeout': str(settings.CONNECT_TIMEOUT),
+            # Get the connection string from config
+            connection_string = get_connection_string()
+            logger.info("Created database connection string")
+            
+            # Create URL object
+            url = URL.create(
+                'postgresql+psycopg2',
+                query={
                     'application_name': 'solana_data_collector',
                     'client_encoding': 'utf8',
                     'keepalives': '1',
@@ -48,10 +42,11 @@ class DatabaseManager:
                     'keepalives_interval': '10',
                     'keepalives_count': '5'
                 }
-            }
-            url = URL.create(**components)
-            logger.info(f"Created database URL with host {host}")
+            ).set(connection_string)
+            
+            logger.info("Created database URL object")
             return url
+            
         except Exception as e:
             logger.error(f"Failed to create connection URL: {str(e)}")
             raise
