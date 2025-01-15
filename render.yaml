@@ -38,10 +38,14 @@ services:
       - key: CONNECT_TIMEOUT
         value: "30"
       - key: SQLALCHEMY_POOL_SIZE
-        value: "20"
+        value: "5"  # Updated to match .env
       - key: SQLALCHEMY_MAX_OVERFLOW
         value: "10"
       - key: SQLALCHEMY_POOL_TIMEOUT
         value: "30"
       - key: SQLALCHEMY_POOL_RECYCLE
         value: "1800"
+      - key: USE_MOCK_DATA
+        value: "true"  # Added from .env
+      - key: TEST_MODE
+        value: "true"  # Added from .env
