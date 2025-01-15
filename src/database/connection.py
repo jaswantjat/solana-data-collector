@@ -2,10 +2,11 @@
 import logging
 from contextlib import contextmanager
 from typing import Generator
+import urllib.parse
 
 import backoff
 from sqlalchemy import create_engine, event
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -21,6 +22,28 @@ class DatabaseManager:
         self.engine = None
         self._setup_engine()
 
+    def _create_connection_url(self) -> URL:
+        """Create SQLAlchemy URL object for database connection."""
+        try:
+            # Parse the components from environment variables
+            components = {
+                'drivername': 'postgresql',
+                'username': settings.PGUSER,
+                'password': settings.PGPASSWORD,
+                'host': settings.PGHOST,
+                'port': settings.PGPORT,
+                'database': settings.PGDATABASE,
+                'query': {
+                    'sslmode': settings.PGSSLMODE,
+                    'connect_timeout': str(settings.CONNECT_TIMEOUT),
+                    'application_name': 'solana_data_collector'
+                }
+            }
+            return URL.create(**components)
+        except Exception as e:
+            logger.error(f"Failed to create connection URL: {str(e)}")
+            raise
+
     @backoff.on_exception(
         backoff.expo,
         (SQLAlchemyError, DBAPIError),
@@ -30,9 +53,12 @@ class DatabaseManager:
     def _setup_engine(self) -> None:
         """Set up the database engine with retries on failure."""
         try:
+            # Create the URL object
+            url = self._create_connection_url()
+            
             # Create engine with SQLAlchemy-specific parameters
             self.engine = create_engine(
-                settings.DATABASE_URL,
+                url,
                 pool_pre_ping=True,
                 pool_size=settings.SQLALCHEMY_POOL_SIZE,
                 max_overflow=settings.SQLALCHEMY_MAX_OVERFLOW,
