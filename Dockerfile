@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     gcc \
     git \
+    postgresql-client \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set work directory

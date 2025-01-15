@@ -3,13 +3,23 @@ import os
 from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 import logging
 from typing import Generator
+import time
+import backoff
 
 from ..config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
+
+def handle_db_error(e: Exception) -> bool:
+    """Determine if error should trigger a retry"""
+    if isinstance(e, OperationalError):
+        logger.warning(f"Database connection error: {e}. Retrying...")
+        return True
+    logger.error(f"Unhandled database error: {e}")
+    return False
 
 class DatabaseManager:
     """Manages database connections and sessions"""
@@ -20,59 +30,59 @@ class DatabaseManager:
         self.Session = None
         self._setup_engine()
         
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,
+        max_tries=5,
+        giveup=handle_db_error
+    )
     def _setup_engine(self):
-        """Initialize database engine"""
+        """Initialize database engine with retries"""
         try:
+            # Add connect_args for SSL mode if needed
+            connect_args = {}
+            if 'sslmode' not in self.database_url:
+                connect_args['sslmode'] = 'require'
+            
             self.engine = create_engine(
                 self.database_url,
                 pool_size=5,
                 max_overflow=10,
                 pool_timeout=30,
-                pool_recycle=1800
+                pool_recycle=1800,
+                connect_args=connect_args
             )
-            self.Session = scoped_session(sessionmaker(bind=self.engine))
-            logger.info("Database engine initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize database engine: {str(e)}")
-            raise
             
+            # Test the connection
+            with self.engine.connect() as conn:
+                conn.execute("SELECT 1")
+            
+            self.Session = scoped_session(
+                sessionmaker(
+                    autocommit=False,
+                    autoflush=False,
+                    bind=self.engine
+                )
+            )
+            logger.info("Database connection established successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup database engine: {e}")
+            raise
+    
     @contextmanager
-    def get_session(self) -> Generator:
+    def session(self) -> Generator:
         """Get a database session"""
         session = self.Session()
         try:
             yield session
             session.commit()
-        except SQLAlchemyError as e:
-            session.rollback()
-            logger.error(f"Database session error: {str(e)}")
-            raise
         except Exception as e:
             session.rollback()
-            logger.error(f"Unexpected error in database session: {str(e)}")
+            logger.error(f"Session error: {e}")
             raise
         finally:
             session.close()
-            
-    def check_connection(self) -> bool:
-        """Test database connection"""
-        try:
-            with self.engine.connect() as conn:
-                conn.execute("SELECT 1")
-            return True
-        except Exception as e:
-            logger.error(f"Database connection test failed: {str(e)}")
-            return False
-            
-    def create_tables(self):
-        """Create all database tables"""
-        from .models import Base
-        try:
-            Base.metadata.create_all(self.engine)
-            logger.info("Database tables created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create database tables: {str(e)}")
-            raise
 
 # Global database manager instance
 db_manager = DatabaseManager()
