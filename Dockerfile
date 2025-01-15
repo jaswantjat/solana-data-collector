@@ -7,8 +7,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     CRYPTOGRAPHY_DONT_BUILD_RUST=1 \
+    PYTHONPATH=/app \
     DATA_DIR=/app/data \
-    PYTHONPATH=/app
+    STATIC_DIR=/app/static \
+    TEMPLATES_DIR=/app/templates \
+    API_RATE_LIMIT=10 \
+    API_RATE_LIMIT_WINDOW=1 \
+    API_TIMEOUT=30 \
+    API_MAX_RETRIES=3 \
+    API_RETRY_DELAY=1 \
+    REDIS_URL=redis://localhost:6379 \
+    REDIS_DB=0 \
+    LOG_LEVEL=INFO \
+    PROMETHEUS_PORT=8000
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,9 +51,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create necessary directories with proper permissions
-RUN mkdir -p $DATA_DIR /app/static /app/templates && \
-    chown -R nobody:nogroup $DATA_DIR /app/static /app/templates && \
-    chmod 777 $DATA_DIR /app/static /app/templates
+RUN mkdir -p $DATA_DIR $STATIC_DIR $TEMPLATES_DIR && \
+    chown -R nobody:nogroup $DATA_DIR $STATIC_DIR $TEMPLATES_DIR && \
+    chmod 777 $DATA_DIR $STATIC_DIR $TEMPLATES_DIR
 
 # Copy project
 COPY . .
