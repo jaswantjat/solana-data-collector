@@ -1,6 +1,7 @@
 """Application settings and configuration."""
 import os
 from pathlib import Path
+import urllib.parse
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -24,7 +25,30 @@ REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
 REDIS_DB = int(os.environ.get('REDIS_DB', '0'))
 
 # Database Settings
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://user:pass@localhost/dbname')
+def get_database_url():
+    """Get database URL with proper SSL and connection settings"""
+    url = os.environ.get('DATABASE_URL', 'postgresql://user:pass@localhost/dbname')
+    
+    # Parse the URL
+    parsed = urllib.parse.urlparse(url)
+    
+    # Add SSL and connection parameters
+    params = {
+        'sslmode': 'require',
+        'connect_timeout': '30',
+        'application_name': 'solana_data_collector'
+    }
+    
+    # If there are existing params, update them
+    existing_params = urllib.parse.parse_qs(parsed.query)
+    for key, value in existing_params.items():
+        params[key] = value[0]
+    
+    # Reconstruct the URL with parameters
+    new_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{urllib.parse.urlencode(params)}"
+    return new_url
+
+DATABASE_URL = get_database_url()
 
 # Security Settings
 SECRET_KEY = os.environ.get('SECRET_KEY', 'your-secret-key-here')

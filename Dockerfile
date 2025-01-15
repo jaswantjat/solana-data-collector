@@ -19,10 +19,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     REDIS_URL=redis://localhost:6379 \
     REDIS_DB=0 \
     LOG_LEVEL=INFO \
-    PROMETHEUS_PORT=8000
+    PROMETHEUS_PORT=8000 \
+    PGCONNECT_TIMEOUT=30 \
+    PGSSLMODE=require \
+    PGHOST=db.rxjcujsiwvrfpnptqozh.supabase.co \
+    PGPORT=5432
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     build-essential \
     python3-dev \
     libffi-dev \
@@ -32,13 +36,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     postgresql-client \
     libpq-dev \
+    iputils-ping \
+    dnsutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Set work directory
 WORKDIR /app
 
 # Upgrade pip
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --upgrade pip setuptools wheel
 
 # Install security dependencies first
 RUN pip install --no-cache-dir \
