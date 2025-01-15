@@ -6,7 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    CRYPTOGRAPHY_DONT_BUILD_RUST=1
+    CRYPTOGRAPHY_DONT_BUILD_RUST=1 \
+    DATA_DIR=/app/data
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,14 +40,19 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create data directory
-RUN mkdir -p /app/data && chmod 777 /app/data
+# Create data directory with proper permissions
+RUN mkdir -p $DATA_DIR && \
+    chown -R nobody:nogroup $DATA_DIR && \
+    chmod 777 $DATA_DIR
 
 # Copy project
 COPY . .
 
 # Run tests
 RUN python test_env.py
+
+# Switch to non-root user
+USER nobody
 
 # Command to run the application
 CMD ["python", "-m", "uvicorn", "src.api.dashboard:app", "--host", "0.0.0.0", "--port", "10000"]
