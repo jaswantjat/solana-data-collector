@@ -22,7 +22,24 @@ from .settings import (
     REDIS_DB,
     
     # Database Settings
-    DATABASE_URL,
+    PGUSER,
+    PGPASSWORD,
+    PGHOST,
+    PGPORT,
+    PGDATABASE,
+    PGSSLMODE,
+    CONNECT_TIMEOUT,
+    
+    # SQLAlchemy Settings
+    SQLALCHEMY_POOL_SIZE,
+    SQLALCHEMY_MAX_OVERFLOW,
+    SQLALCHEMY_POOL_TIMEOUT,
+    SQLALCHEMY_POOL_RECYCLE,
+    
+    # Supabase Settings
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY,
+    SUPABASE_API_KEY,
     
     # Security Settings
     SECRET_KEY,
