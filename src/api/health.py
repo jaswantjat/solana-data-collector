@@ -15,6 +15,8 @@ from src.utils.logging import get_logger
 # Initialize router and logger
 router = APIRouter(tags=["Health"])
 logger = get_logger(__name__)
+
+# Initialize performance manager
 perf_manager = PerformanceManager()
 
 # Track start time for uptime calculation
@@ -160,6 +162,10 @@ async def detailed_health() -> Dict:
         HTTPException: If health check fails
     """
     try:
+        # Initialize performance manager if not already initialized
+        if not perf_manager._initialized:
+            await perf_manager.initialize()
+        
         # Get performance metrics
         metrics = await perf_manager.get_performance_metrics()
         
