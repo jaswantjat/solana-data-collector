@@ -12,12 +12,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     pkg-config \
     gcc \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install cryptography and its dependencies first
+RUN pip install --no-cache-dir \
+    setuptools \
+    wheel \
+    cffi \
+    pycparser \
+    cryptography==41.0.7
+
+# Install remaining Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
