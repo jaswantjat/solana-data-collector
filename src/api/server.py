@@ -3,8 +3,9 @@ import os
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.config import config
 from src.collectors.token_launcher import TokenLaunchCollector
@@ -18,8 +19,9 @@ from src.api.middleware import setup_middleware
 from src.api.health import router as health_router
 from src.api.errors import (
     setup_error_handlers,
+    APIError,
     NotFoundError,
-    ValidationAPIError,
+    ValidationError,
     DatabaseError
 )
 from src.monitoring.performance_manager import PerformanceManager
@@ -30,28 +32,26 @@ logger = get_logger(__name__)
 # Create FastAPI app
 app = FastAPI(
     title="Solana Data Collector API",
-    description="API for analyzing Solana tokens and tracking suspicious activity",
+    description="API for collecting and analyzing Solana token and wallet data",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json"
+    redoc_url="/redoc"
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=config.get('CORS_ORIGINS', ["*"]),
+    allow_origins=["*"],  # In production, replace with specific origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Set up middleware and error handlers
-setup_middleware(app)
+# Setup error handlers
 setup_error_handlers(app)
 
-# Include routers
-app.include_router(health_router, prefix="/health", tags=["Health"])
+# Add health check router
+app.include_router(health_router)
 
 # Initialize managers
 blacklist_manager = BlacklistManager()
@@ -99,12 +99,12 @@ async def get_db():
 async def root():
     """Root endpoint."""
     return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow(),
-        "version": "1.0.0"
+        "name": "Solana Data Collector API",
+        "version": "1.0.0",
+        "status": "running"
     }
 
-@app.post("/analyze/token")
+@app.post("/api/v1/analyze/token")
 async def analyze_token(
     token_address: str,
     include_holder_analysis: bool = True,
@@ -113,8 +113,13 @@ async def analyze_token(
 ):
     """Analyze a Solana token for suspicious activity."""
     try:
-        logger.info(f"Analyzing token: {token_address}")
-        
+        # Validate token address
+        if not token_address or len(token_address) != 44:
+            raise ValidationError(
+                message="Invalid token address format",
+                details={"token_address": token_address}
+            )
+
         # Record request start time
         start_time = datetime.utcnow()
         
@@ -128,8 +133,8 @@ async def analyze_token(
         
         if not analysis_result:
             raise NotFoundError(
-                f"Token {token_address} not found",
-                {"token_address": token_address}
+                message="Token not found",
+                details={"token_address": token_address}
             )
         
         # Record metrics
@@ -139,16 +144,13 @@ async def analyze_token(
         return analysis_result
         
     except Exception as e:
-        logger.error(f"Error analyzing token {token_address}: {str(e)}")
-        await performance_manager.record_error("analyze_token", str(type(e).__name__))
-        if isinstance(e, NotFoundError):
-            raise
-        raise DatabaseError(
-            "Failed to analyze token",
-            {"token_address": token_address, "error": str(e)}
+        logger.exception(f"Error analyzing token {token_address}")
+        raise APIError(
+            message="Failed to analyze token",
+            details={"token_address": token_address, "error": str(e)}
         )
 
-@app.post("/analyze/wallet")
+@app.post("/api/v1/analyze/wallet")
 async def analyze_wallet(
     wallet_address: str,
     include_transaction_history: bool = True,
@@ -156,6 +158,13 @@ async def analyze_wallet(
 ):
     """Analyze a wallet's trading history and behavior."""
     try:
+        # Validate wallet address
+        if not wallet_address or len(wallet_address) != 44:
+            raise ValidationError(
+                message="Invalid wallet address format",
+                details={"wallet_address": wallet_address}
+            )
+
         start_time = datetime.utcnow()
         
         analyzer = WalletAnalyzer(db_session=db)
@@ -166,8 +175,8 @@ async def analyze_wallet(
         
         if not analysis:
             raise NotFoundError(
-                f"Wallet {wallet_address} not found",
-                {"wallet_address": wallet_address}
+                message="Wallet not found",
+                details={"wallet_address": wallet_address}
             )
         
         # Record metrics
@@ -176,16 +185,13 @@ async def analyze_wallet(
             
         return analysis
     except Exception as e:
-        logger.error(f"Error analyzing wallet {wallet_address}: {str(e)}")
-        await performance_manager.record_error("analyze_wallet", str(type(e).__name__))
-        if isinstance(e, NotFoundError):
-            raise
-        raise DatabaseError(
-            "Failed to analyze wallet",
-            {"wallet_address": wallet_address, "error": str(e)}
+        logger.exception(f"Error analyzing wallet {wallet_address}")
+        raise APIError(
+            message="Failed to analyze wallet",
+            details={"wallet_address": wallet_address, "error": str(e)}
         )
 
-@app.get("/blacklist/stats")
+@app.get("/api/v1/blacklist/stats")
 async def get_blacklist_stats(db=Depends(get_db)):
     """Get statistics about blacklisted addresses."""
     try:
@@ -202,7 +208,7 @@ async def get_blacklist_stats(db=Depends(get_db)):
         await performance_manager.record_error("blacklist_stats", str(type(e).__name__))
         raise DatabaseError("Failed to get blacklist stats", {"error": str(e)})
 
-@app.get("/monitor/status")
+@app.get("/api/v1/monitor/status")
 async def get_monitor_status(db=Depends(get_db)):
     """Get current monitoring status."""
     try:
@@ -227,7 +233,7 @@ async def get_monitor_status(db=Depends(get_db)):
         await performance_manager.record_error("monitor_status", str(type(e).__name__))
         raise DatabaseError("Failed to get monitor status", {"error": str(e)})
 
-@app.get("/token/{token_address}")
+@app.get("/api/v1/token/{token_address}")
 async def get_token_data(token_address: str, db=Depends(get_db)):
     """Get all relevant data for a token."""
     try:
@@ -238,8 +244,8 @@ async def get_token_data(token_address: str, db=Depends(get_db)):
         
         if not token_data:
             raise NotFoundError(
-                f"Token {token_address} not found",
-                {"token_address": token_address}
+                message="Token not found",
+                details={"token_address": token_address}
             )
         
         # Record metrics
