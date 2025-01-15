@@ -39,51 +39,69 @@ class PerformanceManager:
             self.cache = {}
             self.cache_config = self._load_cache_config()
             
-            # Initialize Redis
-            self._init_redis()
-            
             # Initialize Prometheus metrics
-            try:
-                self.response_time_histogram = Histogram(
-                    'response_time_seconds',
-                    'Request response time in seconds',
-                    ['endpoint']
-                )
-                self.active_connections_gauge = Gauge(
-                    'active_connections',
-                    'Number of active connections'
-                )
-                self.cache_hit_rate_gauge = Gauge(
-                    'cache_hit_rate',
-                    'Cache hit rate percentage'
-                )
-                self.error_counter = Counter(
-                    'error_count',
-                    'Number of errors',
-                    ['type']
-                )
-            except ValueError:
-                logger.warning("Prometheus metrics already registered, retrieving from registry")
-                for metric in REGISTRY.collect():
-                    if metric.name == 'response_time_seconds':
-                        self.response_time_histogram = metric
-                    elif metric.name == 'active_connections':
-                        self.active_connections_gauge = metric
-                    elif metric.name == 'cache_hit_rate':
-                        self.cache_hit_rate_gauge = metric
-                    elif metric.name == 'error_count':
-                        self.error_counter = metric
-            
-            try:
-                start_http_server(8000)
-                logger.info("Prometheus metrics server started on port 8000")
-            except Exception as e:
-                logger.error(f"Failed to start Prometheus server: {e}")
+            self._init_prometheus_metrics()
             
             self._initialized = True
 
+    async def initialize(self):
+        try:
+            await self._init_redis()
+            logger.info("Performance manager initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize performance manager: {str(e)}")
+            raise
+
+    def _init_metrics(self):
+        self.metrics = {
+            "response_times": [],
+            "cpu_usage": [],
+            "memory_usage": [],
+            "active_connections": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "errors": defaultdict(int)
+        }
+        
+    def _init_prometheus_metrics(self):
+        try:
+            self.response_time_histogram = Histogram(
+                'response_time_seconds',
+                'Request response time in seconds',
+                ['endpoint']
+            )
+            self.active_connections_gauge = Gauge(
+                'active_connections',
+                'Number of active connections'
+            )
+            self.cache_hit_rate_gauge = Gauge(
+                'cache_hit_rate',
+                'Cache hit rate percentage'
+            )
+            self.error_counter = Counter(
+                'error_count',
+                'Number of errors',
+                ['type']
+            )
+        except ValueError:
+            logger.warning("Prometheus metrics already registered, retrieving from registry")
+            for metric in REGISTRY.collect():
+                if metric.name == 'response_time_seconds':
+                    self.response_time_histogram = metric
+                elif metric.name == 'active_connections':
+                    self.active_connections_gauge = metric
+                elif metric.name == 'cache_hit_rate':
+                    self.cache_hit_rate_gauge = metric
+                elif metric.name == 'error_count':
+                    self.error_counter = metric
+            
+        try:
+            start_http_server(8000)
+            logger.info("Prometheus metrics server started on port 8000")
+        except Exception as e:
+            logger.error(f"Failed to start Prometheus server: {e}")
+            
     async def _init_redis(self):
-        """Initialize Redis connection with retries"""
         max_retries = 3
         retry_delay = 5  # seconds
         
@@ -104,20 +122,7 @@ class PerformanceManager:
                     logger.error(f"Failed to connect to Redis after {max_retries} attempts: {e}")
                     self.redis = None
 
-    def _init_metrics(self):
-        """Initialize performance metrics"""
-        self.metrics = {
-            "response_times": [],
-            "cpu_usage": [],
-            "memory_usage": [],
-            "active_connections": 0,
-            "cache_hits": 0,
-            "cache_misses": 0,
-            "errors": defaultdict(int)
-        }
-        
     def _load_cache_config(self) -> Dict:
-        """Load cache configuration"""
         try:
             config_path = Path(__file__).parent.parent / "config" / "cache_config.json"
             if config_path.exists():
@@ -137,43 +142,35 @@ class PerformanceManager:
             }
             
     async def monitor_system_health(self):
-        """Monitor system health metrics"""
         while True:
             try:
-                # Collect system metrics
                 cpu_percent = psutil.cpu_percent(interval=1)
                 memory = psutil.virtual_memory()
                 disk = psutil.disk_usage('/')
                 
-                # Update Prometheus metrics
                 Gauge('cpu_usage_percent', 'CPU usage percentage').set(cpu_percent)
                 Gauge('memory_usage_percent', 'Memory usage percentage').set(memory.percent)
                 Gauge('disk_usage_percent', 'Disk usage percentage').set(disk.percent)
                 
-                # Store metrics history
                 timestamp = datetime.now().isoformat()
                 self.metrics_history["cpu"].append((timestamp, cpu_percent))
                 self.metrics_history["memory"].append((timestamp, memory.percent))
                 self.metrics_history["disk"].append((timestamp, disk.percent))
                 
-                # Cleanup old metrics
                 self._cleanup_metrics_history()
                 
-                # Check for system alerts
                 await self._check_system_alerts({
                     "cpu": cpu_percent,
                     "memory": memory.percent,
                     "disk": disk.percent
                 })
                 
-                await asyncio.sleep(60)  # Monitor every minute
-                
+                await asyncio.sleep(60)  
             except Exception as e:
                 logger.error(f"Error monitoring system health: {str(e)}")
                 await asyncio.sleep(60)
                 
     def _cleanup_metrics_history(self):
-        """Cleanup old metrics history"""
         try:
             cutoff = datetime.now() - timedelta(days=7)
             for metric_type in self.metrics_history:
@@ -185,7 +182,6 @@ class PerformanceManager:
             logger.error(f"Error cleaning up metrics history: {str(e)}")
             
     async def _check_system_alerts(self, metrics: Dict):
-        """Check system metrics for alert conditions"""
         try:
             alerts = []
             
@@ -198,7 +194,6 @@ class PerformanceManager:
             if metrics["disk"] > 80:
                 alerts.append(("HIGH_DISK", f"Disk usage at {metrics['disk']}%"))
                 
-            # Send alerts if any
             if alerts:
                 await self._send_system_alerts(alerts)
                 
@@ -206,9 +201,7 @@ class PerformanceManager:
             logger.error(f"Error checking system alerts: {str(e)}")
             
     async def _send_system_alerts(self, alerts: List[tuple]):
-        """Send system alerts"""
         try:
-            # Implement your alert sending mechanism here
             for alert_type, message in alerts:
                 logger.warning(f"System Alert - {alert_type}: {message}")
                 
@@ -216,12 +209,10 @@ class PerformanceManager:
             logger.error(f"Error sending system alerts: {str(e)}")
             
     async def record_response_time(self, endpoint: str, response_time: float):
-        """Record API endpoint response time"""
         try:
             self.response_time_histogram.labels(endpoint).observe(response_time)
             self.metrics["response_times"].append((endpoint, response_time))
             
-            # Calculate and store average response time
             avg_time = np.mean([t for _, t in self.metrics["response_times"]])
             Gauge('average_response_time_seconds', 'Average response time in seconds').set(avg_time)
             
@@ -229,7 +220,6 @@ class PerformanceManager:
             logger.error(f"Error recording response time: {str(e)}")
             
     def update_connection_count(self, delta: int):
-        """Update active connection count"""
         try:
             self.metrics["active_connections"] += delta
             self.active_connections_gauge.set(self.metrics["active_connections"])
@@ -237,7 +227,6 @@ class PerformanceManager:
             logger.error(f"Error updating connection count: {str(e)}")
             
     async def get_cached_data(self, key: str) -> Optional[Dict]:
-        """Get data from cache"""
         try:
             if key in self.cache:
                 data, expiry = self.cache[key]
@@ -255,14 +244,12 @@ class PerformanceManager:
             return None
             
     async def set_cached_data(self, key: str, data: Dict, ttl: Optional[int] = None):
-        """Set data in cache"""
         try:
             if ttl is None:
                 ttl = self.cache_config["ttl"]
                 
             self.cache[key] = (data, time.time() + ttl)
             
-            # Cleanup if cache size exceeds limit
             if len(self.cache) > self.cache_config["max_size"]:
                 await self._cleanup_cache()
                 
@@ -270,7 +257,6 @@ class PerformanceManager:
             logger.error(f"Error setting cache: {str(e)}")
             
     async def _cleanup_cache(self):
-        """Cleanup expired cache entries"""
         try:
             current_time = time.time()
             expired_keys = [
@@ -285,7 +271,6 @@ class PerformanceManager:
             logger.error(f"Error cleaning up cache: {str(e)}")
             
     def _update_cache_metrics(self):
-        """Update cache hit rate metrics"""
         try:
             total_requests = self.metrics["cache_hits"] + self.metrics["cache_misses"]
             if total_requests > 0:
@@ -295,7 +280,6 @@ class PerformanceManager:
             logger.error(f"Error updating cache metrics: {str(e)}")
             
     def record_error(self, error_type: str):
-        """Record error occurrence"""
         try:
             self.metrics["errors"][error_type] += 1
             self.error_counter.labels(type=error_type).inc()
@@ -303,9 +287,7 @@ class PerformanceManager:
             logger.error(f"Error recording error: {str(e)}")
             
     async def get_performance_metrics(self) -> PerformanceMetrics:
-        """Get current performance metrics"""
         try:
-            # Calculate metrics
             avg_response_time = np.mean([t for _, t in self.metrics["response_times"]]) if self.metrics["response_times"] else 0
             cpu_usage = psutil.cpu_percent()
             memory = psutil.virtual_memory()
@@ -324,7 +306,6 @@ class PerformanceManager:
             return None
             
     async def get_metrics_history(self, metric_type: str, duration_hours: int = 24) -> List[tuple]:
-        """Get historical metrics"""
         try:
             cutoff = datetime.now() - timedelta(hours=duration_hours)
             return [

@@ -1,11 +1,10 @@
-"""FastAPI server for Solana Data Collector."""
-import logging
+"""FastAPI server initialization and configuration."""
+import os
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from src.config import config
 from src.collectors.token_launcher import TokenLaunchCollector
@@ -23,6 +22,7 @@ from src.api.errors import (
     ValidationAPIError,
     DatabaseError
 )
+from src.monitoring.performance_manager import PerformanceManager
 
 # Configure logging
 logger = get_logger(__name__)
@@ -56,42 +56,7 @@ app.include_router(health_router, prefix="/health", tags=["Health"])
 # Initialize managers
 blacklist_manager = BlacklistManager()
 suspicious_analyzer = SuspiciousActivityAnalyzer()
-
-# Pydantic models for request/response
-class TokenAnalysisRequest(BaseModel):
-    token_address: str
-    include_holder_analysis: bool = True
-    include_twitter_analysis: bool = True
-
-class TokenAnalysisResponse(BaseModel):
-    token_address: str
-    is_suspicious: bool
-    risk_factors: List[str]
-    confidence_score: float
-    analysis_timestamp: datetime
-
-class WalletAnalysisRequest(BaseModel):
-    wallet_address: str
-    include_transaction_history: bool = True
-
-class WalletAnalysisResponse(BaseModel):
-    wallet_address: str
-    risk_score: float
-    suspicious_transactions: List[Dict]
-    analysis_timestamp: datetime
-
-class BlacklistInfo(BaseModel):
-    total_blacklisted: int
-    total_scam_amount: float
-    recent_additions: List[Dict]
-
-async def get_db():
-    """Dependency for database sessions."""
-    session = db_manager.get_session()
-    try:
-        yield session
-    finally:
-        session.close()
+performance_manager = PerformanceManager()
 
 @app.on_event("startup")
 async def startup_event():
@@ -103,10 +68,32 @@ async def startup_event():
         logger.info("Initializing blacklist manager...")
         await blacklist_manager.initialize()
         
+        logger.info("Initializing performance manager...")
+        await performance_manager.initialize()
+        
         logger.info("API server started successfully")
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
         raise DatabaseError("Failed to initialize services", {"error": str(e)})
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown."""
+    try:
+        logger.info("Shutting down services...")
+        if performance_manager.redis:
+            await performance_manager.redis.close()
+        logger.info("Services shut down successfully")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {str(e)}")
+
+async def get_db():
+    """Dependency for database sessions."""
+    session = db_manager.get_session()
+    try:
+        yield session
+    finally:
+        session.close()
 
 @app.get("/")
 async def root():
@@ -117,103 +104,135 @@ async def root():
         "version": "1.0.0"
     }
 
-@app.post("/analyze/token", response_model=TokenAnalysisResponse)
+@app.post("/analyze/token")
 async def analyze_token(
-    request: TokenAnalysisRequest,
+    token_address: str,
+    include_holder_analysis: bool = True,
+    include_twitter_analysis: bool = True,
     db=Depends(get_db)
 ):
     """Analyze a Solana token for suspicious activity."""
     try:
-        logger.info(f"Analyzing token: {request.token_address}")
+        logger.info(f"Analyzing token: {token_address}")
+        
+        # Record request start time
+        start_time = datetime.utcnow()
         
         # Perform analysis
         analysis_result = await suspicious_analyzer.analyze_token(
-            request.token_address,
-            include_holder_analysis=request.include_holder_analysis,
-            include_twitter_analysis=request.include_twitter_analysis,
+            token_address,
+            include_holder_analysis=include_holder_analysis,
+            include_twitter_analysis=include_twitter_analysis,
             db_session=db
         )
         
         if not analysis_result:
             raise NotFoundError(
-                f"Token {request.token_address} not found",
-                {"token_address": request.token_address}
+                f"Token {token_address} not found",
+                {"token_address": token_address}
             )
         
-        return TokenAnalysisResponse(
-            token_address=request.token_address,
-            is_suspicious=analysis_result.is_suspicious,
-            risk_factors=analysis_result.risk_factors,
-            confidence_score=analysis_result.confidence_score,
-            analysis_timestamp=datetime.utcnow()
-        )
+        # Record metrics
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        await performance_manager.record_request("analyze_token", "POST", duration)
+        
+        return analysis_result
         
     except Exception as e:
-        logger.error(f"Error analyzing token {request.token_address}: {str(e)}")
+        logger.error(f"Error analyzing token {token_address}: {str(e)}")
+        await performance_manager.record_error("analyze_token", str(type(e).__name__))
         if isinstance(e, NotFoundError):
             raise
         raise DatabaseError(
             "Failed to analyze token",
-            {"token_address": request.token_address, "error": str(e)}
+            {"token_address": token_address, "error": str(e)}
         )
 
-@app.post("/analyze/wallet", response_model=WalletAnalysisResponse)
+@app.post("/analyze/wallet")
 async def analyze_wallet(
-    request: WalletAnalysisRequest,
+    wallet_address: str,
+    include_transaction_history: bool = True,
     db=Depends(get_db)
 ):
     """Analyze a wallet's trading history and behavior."""
     try:
+        start_time = datetime.utcnow()
+        
         analyzer = WalletAnalyzer(db_session=db)
         analysis = await analyzer.analyze_wallet(
-            request.wallet_address,
-            include_history=request.include_transaction_history
+            wallet_address,
+            include_history=include_transaction_history
         )
         
         if not analysis:
             raise NotFoundError(
-                f"Wallet {request.wallet_address} not found",
-                {"wallet_address": request.wallet_address}
+                f"Wallet {wallet_address} not found",
+                {"wallet_address": wallet_address}
             )
+        
+        # Record metrics
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        await performance_manager.record_request("analyze_wallet", "POST", duration)
             
         return analysis
     except Exception as e:
-        logger.error(f"Error analyzing wallet {request.wallet_address}: {str(e)}")
+        logger.error(f"Error analyzing wallet {wallet_address}: {str(e)}")
+        await performance_manager.record_error("analyze_wallet", str(type(e).__name__))
         if isinstance(e, NotFoundError):
             raise
         raise DatabaseError(
             "Failed to analyze wallet",
-            {"wallet_address": request.wallet_address, "error": str(e)}
+            {"wallet_address": wallet_address, "error": str(e)}
         )
 
-@app.get("/blacklist/stats", response_model=BlacklistInfo)
+@app.get("/blacklist/stats")
 async def get_blacklist_stats(db=Depends(get_db)):
     """Get statistics about blacklisted addresses."""
     try:
-        stats = await blacklist_manager.get_stats(db_session=db)
-        return BlacklistInfo(**stats)
+        start_time = datetime.utcnow()
+        stats = await blacklist_manager.get_stats()
+        
+        # Record metrics
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        await performance_manager.record_request("blacklist_stats", "GET", duration)
+        
+        return stats
     except Exception as e:
         logger.error(f"Error getting blacklist stats: {str(e)}")
+        await performance_manager.record_error("blacklist_stats", str(type(e).__name__))
         raise DatabaseError("Failed to get blacklist stats", {"error": str(e)})
 
 @app.get("/monitor/status")
 async def get_monitor_status(db=Depends(get_db)):
     """Get current monitoring status."""
     try:
-        return {
+        start_time = datetime.utcnow()
+        
+        # Get monitoring data
+        status = {
             "status": "active",
             "last_update": datetime.utcnow(),
             "monitored_tokens": await TokenLaunchCollector(db_session=db).get_monitored_count(),
-            "active_alerts": await suspicious_analyzer.get_active_alerts_count(db_session=db)
+            "active_alerts": await suspicious_analyzer.get_active_alerts_count(db_session=db),
+            "performance_metrics": await performance_manager.get_performance_metrics()
         }
+        
+        # Record metrics
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        await performance_manager.record_request("monitor_status", "GET", duration)
+        
+        return status
     except Exception as e:
         logger.error(f"Error getting monitor status: {str(e)}")
+        await performance_manager.record_error("monitor_status", str(type(e).__name__))
         raise DatabaseError("Failed to get monitor status", {"error": str(e)})
 
 @app.get("/token/{token_address}")
 async def get_token_data(token_address: str, db=Depends(get_db)):
-    """Gather all relevant data for a token."""
+    """Get all relevant data for a token."""
     try:
+        start_time = datetime.utcnow()
+        
         collector = TokenLaunchCollector(db_session=db)
         token_data = await collector.get_token_data(token_address)
         
@@ -222,10 +241,15 @@ async def get_token_data(token_address: str, db=Depends(get_db)):
                 f"Token {token_address} not found",
                 {"token_address": token_address}
             )
+        
+        # Record metrics
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        await performance_manager.record_request("get_token", "GET", duration)
             
         return token_data
     except Exception as e:
         logger.error(f"Error getting token data for {token_address}: {str(e)}")
+        await performance_manager.record_error("get_token", str(type(e).__name__))
         if isinstance(e, NotFoundError):
             raise
         raise DatabaseError(

@@ -1,12 +1,25 @@
+"""Blacklist manager for tracking suspicious wallets and deployers."""
 import json
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
+
 import aiofiles
 import os
 
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 class BlacklistManager:
+    """Manages blacklists of suspicious wallets and deployers."""
+    
     def __init__(self, data_dir: str = "data"):
+        """Initialize the blacklist manager.
+        
+        Args:
+            data_dir: Directory to store blacklist data
+        """
         self.data_dir = data_dir
         self.blacklist_file = os.path.join(data_dir, "blacklists", "deployer_blacklist.json")
         self.wallet_backlog_file = os.path.join(data_dir, "backlogs", "wallet_backlog.json")
@@ -16,43 +29,70 @@ class BlacklistManager:
             "trusted_wallets": {}
         }
         self._ensure_directories()
-        self._load_data()
+
+    async def initialize(self):
+        """Initialize the blacklist manager by loading data."""
+        try:
+            await self._load_data()
+            logger.info("Blacklist manager initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize blacklist manager: {str(e)}")
+            raise
 
     def _ensure_directories(self):
-        """Ensure required directories exist"""
-        os.makedirs(os.path.join(self.data_dir, "blacklists"), exist_ok=True)
-        os.makedirs(os.path.join(self.data_dir, "backlogs"), exist_ok=True)
+        """Ensure required directories exist."""
+        try:
+            os.makedirs(os.path.join(self.data_dir, "blacklists"), exist_ok=True)
+            os.makedirs(os.path.join(self.data_dir, "backlogs"), exist_ok=True)
+            logger.info("Created blacklist directories")
+        except Exception as e:
+            logger.error(f"Failed to create directories: {str(e)}")
+            raise
 
-    def _load_data(self):
-        """Load blacklist and backlog data from files"""
+    async def _load_data(self):
+        """Load blacklist and backlog data from files."""
         try:
             if os.path.exists(self.blacklist_file):
-                with open(self.blacklist_file, 'r') as f:
-                    self.blacklisted_deployers = json.load(f)
+                async with aiofiles.open(self.blacklist_file, 'r') as f:
+                    content = await f.read()
+                    self.blacklisted_deployers = json.loads(content)
+                logger.info("Loaded blacklist data")
         except Exception as e:
-            print(f"Error loading blacklist: {str(e)}")
+            logger.error(f"Error loading blacklist: {str(e)}")
             self.blacklisted_deployers = {}
 
         try:
             if os.path.exists(self.wallet_backlog_file):
-                with open(self.wallet_backlog_file, 'r') as f:
-                    self.wallet_backlog = json.load(f)
+                async with aiofiles.open(self.wallet_backlog_file, 'r') as f:
+                    content = await f.read()
+                    self.wallet_backlog = json.loads(content)
+                logger.info("Loaded wallet backlog data")
         except Exception as e:
-            print(f"Error loading wallet backlog: {str(e)}")
+            logger.error(f"Error loading wallet backlog: {str(e)}")
             self.wallet_backlog = {
                 "scammer_wallets": {},
                 "trusted_wallets": {}
             }
 
     async def _save_blacklist(self):
-        """Save blacklist data to file"""
-        async with aiofiles.open(self.blacklist_file, 'w') as f:
-            await f.write(json.dumps(self.blacklisted_deployers, indent=2))
+        """Save blacklist data to file."""
+        try:
+            async with aiofiles.open(self.blacklist_file, 'w') as f:
+                await f.write(json.dumps(self.blacklisted_deployers, indent=2))
+            logger.info("Saved blacklist data")
+        except Exception as e:
+            logger.error(f"Failed to save blacklist: {str(e)}")
+            raise
 
-    async def _save_wallet_backlog(self):
-        """Save wallet backlog data to file"""
-        async with aiofiles.open(self.wallet_backlog_file, 'w') as f:
-            await f.write(json.dumps(self.wallet_backlog, indent=2))
+    async def _save_backlog(self):
+        """Save wallet backlog data to file."""
+        try:
+            async with aiofiles.open(self.wallet_backlog_file, 'w') as f:
+                await f.write(json.dumps(self.wallet_backlog, indent=2))
+            logger.info("Saved wallet backlog data")
+        except Exception as e:
+            logger.error(f"Failed to save backlog: {str(e)}")
+            raise
 
     async def add_to_blacklist(
         self,
@@ -115,7 +155,7 @@ class BlacklistManager:
                 "scam_history": [],
                 "total_scam_amount": 0.0
             }
-            await self._save_wallet_backlog()
+            await self._save_backlog()
             return True
         return False
 
@@ -136,7 +176,7 @@ class BlacklistManager:
                 "successful_trades": [],
                 "total_profit": 0.0
             }
-            await self._save_wallet_backlog()
+            await self._save_backlog()
             return True
         return False
 
@@ -151,7 +191,7 @@ class BlacklistManager:
         if wallet_address in self.wallet_backlog["scammer_wallets"]:
             self.wallet_backlog["scammer_wallets"][wallet_address]["scam_history"].append(scam_event)
             self.wallet_backlog["scammer_wallets"][wallet_address]["total_scam_amount"] += scam_event.get("amount", 0)
-            await self._save_wallet_backlog()
+            await self._save_backlog()
             return True
         return False
 
@@ -166,7 +206,7 @@ class BlacklistManager:
         if wallet_address in self.wallet_backlog["trusted_wallets"]:
             self.wallet_backlog["trusted_wallets"][wallet_address]["successful_trades"].append(trade_event)
             self.wallet_backlog["trusted_wallets"][wallet_address]["total_profit"] += trade_event.get("profit", 0)
-            await self._save_wallet_backlog()
+            await self._save_backlog()
             return True
         return False
 
