@@ -1,100 +1,185 @@
 """Logging configuration module."""
 import logging
+import logging.config
 import sys
-from typing import Optional
+import json
+from typing import Optional, Dict, Any
 from logging.handlers import RotatingFileHandler
 import os
 from datetime import datetime
+import traceback
+import uuid
+from contextlib import contextmanager
 
-def setup_logger(
-    name: str,
+class JsonFormatter(logging.Formatter):
+    """JSON formatter for structured logging."""
+    
+    def __init__(self, **kwargs):
+        """Initialize formatter with optional fields."""
+        self.default_fields = kwargs
+        super().__init__()
+    
+    def format(self, record: logging.LogRecord) -> str:
+        """Format the log record as JSON."""
+        # Base log data
+        log_data = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "location": f"{record.filename}:{record.lineno}",
+            "function": record.funcName
+        }
+        
+        # Add traceback for errors
+        if record.exc_info:
+            log_data["traceback"] = self.formatException(record.exc_info)
+        
+        # Add extra fields from record
+        if hasattr(record, "extra"):
+            log_data.update(record.extra)
+        
+        # Add default fields
+        log_data.update(self.default_fields)
+        
+        # Add request_id if available
+        request_id = getattr(record, "request_id", None)
+        if request_id:
+            log_data["request_id"] = request_id
+        
+        return json.dumps(log_data)
+
+def setup_logging(
     level: int = logging.INFO,
     log_file: Optional[str] = None,
-    max_bytes: int = 10 * 1024 * 1024,  # 10MB
-    backup_count: int = 5,
-    log_format: Optional[str] = None
-) -> logging.Logger:
-    """Configure and return a logger instance.
+    format: str = "json",
+    env: str = "development"
+) -> None:
+    """Setup global logging configuration.
     
     Args:
-        name: Logger name
-        level: Logging level (default: INFO)
-        log_file: Optional log file path
-        max_bytes: Maximum size of log file before rotation
-        backup_count: Number of backup files to keep
-        log_format: Optional custom log format
-        
-    Returns:
-        logging.Logger: Configured logger instance
+        level: Logging level
+        log_file: Path to log file
+        format: Log format ('json' or 'text')
+        env: Environment ('development' or 'production')
     """
-    # Create logger
-    logger = logging.getLogger(name)
-    
-    # Clear any existing handlers
-    logger.handlers.clear()
-    
-    # Set level
-    logger.setLevel(level)
-
-    # Default formats
-    default_console_format = '%(asctime)s - %(levelname)s - %(message)s'
-    default_file_format = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-
-    # Create formatters
-    console_formatter = logging.Formatter(
-        log_format or default_console_format,
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    file_formatter = logging.Formatter(
-        log_format or default_file_format,
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
-
-    # File handler (if log_file is specified)
+    # Create logs directory if needed
     if log_file:
-        try:
-            # Create log directory if it doesn't exist
-            log_dir = os.path.dirname(log_file)
-            if log_dir:
-                os.makedirs(log_dir, exist_ok=True)
-
-            # Create rotating file handler
-            file_handler = RotatingFileHandler(
-                log_file,
-                maxBytes=max_bytes,
-                backupCount=backup_count,
-                encoding='utf-8'
-            )
-            file_handler.setFormatter(file_formatter)
-            logger.addHandler(file_handler)
-        except Exception as e:
-            logger.error(f"Failed to setup file logging: {str(e)}")
-
-    return logger
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    
+    # Base config
+    config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "json": {
+                "()": JsonFormatter,
+                "environment": env
+            },
+            "text": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S"
+            }
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": format,
+                "stream": sys.stdout
+            }
+        },
+        "root": {
+            "level": level,
+            "handlers": ["console"]
+        }
+    }
+    
+    # Add file handler if log_file is specified
+    if log_file:
+        config["handlers"]["file"] = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "formatter": format,
+            "filename": log_file,
+            "maxBytes": 10 * 1024 * 1024,  # 10MB
+            "backupCount": 5,
+            "encoding": "utf-8"
+        }
+        config["root"]["handlers"].append("file")
+    
+    # Apply configuration
+    logging.config.dictConfig(config)
 
 def get_logger(name: str) -> logging.Logger:
     """Get a configured logger instance.
     
-    This is the main function to get a logger. It sets up a logger with both
-    console and file output, with the file being in the 'logs' directory.
-    
     Args:
-        name: Name of the logger (usually __name__)
+        name: Logger name (usually __name__)
         
     Returns:
         logging.Logger: Configured logger instance
     """
-    # Create logs directory in the project root
-    log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
-    log_file = os.path.join(log_dir, f'{name}.log')
+    logger = logging.getLogger(name)
     
-    return setup_logger(
-        name=name,
-        level=logging.INFO,
-        log_file=log_file
+    # Add request_id to context if not present
+    if not hasattr(logger, "request_id"):
+        logger.request_id = str(uuid.uuid4())
+    
+    return logger
+
+@contextmanager
+def LogContext(logger: logging.Logger, **context):
+    """Context manager for adding context to logs.
+    
+    Args:
+        logger: Logger instance
+        **context: Context key-value pairs
+    """
+    old_context = {}
+    
+    # Save old context
+    if hasattr(logger, "extra"):
+        old_context = logger.extra
+    
+    # Add new context
+    logger.extra = {
+        **(getattr(logger, "extra", {})),
+        **context
+    }
+    
+    try:
+        yield logger
+    finally:
+        # Restore old context
+        if old_context:
+            logger.extra = old_context
+        else:
+            delattr(logger, "extra")
+
+def log_error(
+    logger: logging.Logger,
+    error: Exception,
+    message: str,
+    context: Optional[Dict[str, Any]] = None
+) -> None:
+    """Log an error with context.
+    
+    Args:
+        logger: Logger instance
+        error: Exception to log
+        message: Error message
+        context: Additional context
+    """
+    error_context = {
+        "error_type": error.__class__.__name__,
+        "error_message": str(error),
+        "traceback": traceback.format_exc()
+    }
+    
+    if context:
+        error_context.update(context)
+    
+    logger.error(
+        message,
+        extra=error_context,
+        exc_info=True
     )
