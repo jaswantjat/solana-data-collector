@@ -49,10 +49,20 @@ class JsonFormatter(logging.Formatter):
         
         return json.dumps(log_data)
 
+class TextFormatter(logging.Formatter):
+    """Text formatter for standard logging."""
+    
+    def __init__(self):
+        """Initialize formatter."""
+        super().__init__(
+            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+
 def setup_logging(
     level: int = logging.INFO,
     log_file: Optional[str] = None,
-    format: str = "json",
+    format_type: str = "json",
     env: str = "development"
 ) -> None:
     """Setup global logging configuration.
@@ -60,7 +70,7 @@ def setup_logging(
     Args:
         level: Logging level
         log_file: Path to log file
-        format: Log format ('json' or 'text')
+        format_type: Log format ('json' or 'text')
         env: Environment ('development' or 'production')
     """
     # Create logs directory if needed
@@ -73,18 +83,17 @@ def setup_logging(
         "disable_existing_loggers": False,
         "formatters": {
             "json": {
-                "()": JsonFormatter,
+                "()": "src.utils.logging.JsonFormatter",
                 "environment": env
             },
             "text": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S"
+                "()": "src.utils.logging.TextFormatter"
             }
         },
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
-                "formatter": format,
+                "formatter": format_type,
                 "stream": sys.stdout
             }
         },
@@ -98,7 +107,7 @@ def setup_logging(
     if log_file:
         config["handlers"]["file"] = {
             "class": "logging.handlers.RotatingFileHandler",
-            "formatter": format,
+            "formatter": format_type,
             "filename": log_file,
             "maxBytes": 10 * 1024 * 1024,  # 10MB
             "backupCount": 5,
