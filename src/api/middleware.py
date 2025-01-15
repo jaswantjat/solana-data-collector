@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import Message
 
 from src.utils.logging import get_logger
+from src.api.errors import APIError, ValidationError
 
 logger = get_logger(__name__)
 
@@ -29,19 +30,8 @@ class RequestTracingMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
         request.state.request_id = request_id
         
-        # Start timer
+        # Record start time
         start_time = time.time()
-        
-        # Log request
-        logger.info(
-            f"Request started",
-            extra={
-                "request_id": request_id,
-                "method": request.method,
-                "url": str(request.url),
-                "client": request.client.host if request.client else "unknown"
-            }
-        )
         
         try:
             # Process request
@@ -49,51 +39,41 @@ class RequestTracingMiddleware(BaseHTTPMiddleware):
             
             # Add tracing headers
             response.headers["X-Request-ID"] = request_id
-            process_time = time.time() - start_time
-            response.headers["X-Process-Time"] = str(process_time)
-            
-            # Log response
-            logger.info(
-                f"Request completed",
-                extra={
-                    "request_id": request_id,
-                    "status_code": response.status_code,
-                    "process_time": process_time
-                }
-            )
+            response.headers["X-Response-Time"] = str(int((time.time() - start_time) * 1000))
             
             return response
             
         except Exception as e:
-            # Log error
-            logger.error(
-                f"Request failed: {str(e)}",
+            # Log error with request context
+            logger.exception(
+                f"Error processing request: {str(e)}",
                 extra={
                     "request_id": request_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
-            
-            # Return error response
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "detail": "Internal server error",
-                    "request_id": request_id
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error": str(e)
                 }
             )
+            
+            # Convert to API error if needed
+            if not isinstance(e, APIError):
+                e = APIError(
+                    message="Internal server error",
+                    details={"error": str(e)}
+                )
+            
+            return JSONResponse(
+                status_code=e.status_code,
+                content=e.detail
+            )
 
-def setup_middleware(app: FastAPI) -> None:
+def setup_middleware(app: FastAPI):
     """Set up all middleware for the application.
     
     Args:
         app: The FastAPI application instance
     """
-    # Add request tracing middleware
+    # Add request tracing
     app.add_middleware(RequestTracingMiddleware)
     
     # Add other middleware as needed
-    # app.add_middleware(AuthenticationMiddleware)
-    # app.add_middleware(RateLimitingMiddleware)

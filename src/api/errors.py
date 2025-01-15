@@ -131,93 +131,43 @@ class ServiceUnavailableError(APIError):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE
         )
 
-def setup_error_handlers(app: FastAPI) -> None:
+def setup_error_handlers(app: FastAPI):
     """Setup error handlers for the FastAPI app.
     
     Args:
         app: FastAPI application instance
     """
-    @app.exception_handler(APIError)
-    async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
-        """Handle API errors."""
-        # Log request information
-        logger.error(
-            f"API Error on {request.method} {request.url.path}",
-            extra={
-                "error_type": exc.error_type,
-                "status_code": exc.status_code,
-                "client_host": request.client.host if request.client else None,
-                "request_path": request.url.path,
-                "request_method": request.method
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """Handle validation errors from FastAPI/Pydantic."""
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "message": "Request validation failed",
+                "error_type": "ValidationError",
+                "details": {"errors": exc.errors()},
+                "timestamp": datetime.utcnow().isoformat()
             }
         )
+
+    @app.exception_handler(APIError)
+    async def api_error_handler(request: Request, exc: APIError):
+        """Handle custom API errors."""
         return JSONResponse(
             status_code=exc.status_code,
             content=exc.detail
         )
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-        """Handle request validation errors."""
-        # Extract and format validation errors
-        validation_errors = []
-        for error in exc.errors():
-            validation_errors.append({
-                "field": " -> ".join(str(loc) for loc in error["loc"]),
-                "message": error["msg"],
-                "type": error["type"]
-            })
-            
-        error_response = {
-            "message": "Request validation failed",
-            "error_type": "ValidationError",
-            "details": {
-                "validation_errors": validation_errors
-            },
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # Log validation errors
-        logger.warning(
-            f"Validation error on {request.method} {request.url.path}",
-            extra={
-                "validation_errors": validation_errors,
-                "client_host": request.client.host if request.client else None,
-                "request_path": request.url.path,
-                "request_method": request.method
-            }
-        )
-        
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=error_response
-        )
-
     @app.exception_handler(Exception)
-    async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        """Handle unexpected errors."""
-        error_response = {
-            "message": "An unexpected error occurred",
-            "error_type": "InternalServerError",
-            "details": {
-                "type": type(exc).__name__,
-                "message": str(exc)
-            } if app.debug else None,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # Log unexpected errors with full traceback
-        logger.exception(
-            f"Unexpected error on {request.method} {request.url.path}: {str(exc)}",
-            extra={
-                "error_type": type(exc).__name__,
-                "client_host": request.client.host if request.client else None,
-                "request_path": request.url.path,
-                "request_method": request.method
-            }
-        )
-        
+    async def general_exception_handler(request: Request, exc: Exception):
+        """Handle any unhandled exceptions."""
+        logger.exception("Unhandled exception occurred", exc_info=exc)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=error_response
+            content={
+                "message": "An unexpected error occurred",
+                "error_type": "InternalServerError",
+                "details": {"error": str(exc)},
+                "timestamp": datetime.utcnow().isoformat()
+            }
         )
