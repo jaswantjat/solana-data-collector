@@ -1,3 +1,4 @@
+"""Module for analyzing suspicious activity in token trading and transfers."""
 import asyncio
 from datetime import datetime, timedelta
 import numpy as np
@@ -10,6 +11,129 @@ class SuspiciousActivityAnalyzer:
         self.supply_threshold = 0.9  # 90% of supply in single wallet is suspicious
         self.batch_time_threshold = 300  # 5 minutes between batches is suspicious
         self.similar_amount_threshold = 0.05  # 5% difference for similar amounts
+    
+    async def analyze_token(
+        self,
+        token_data: Dict,
+        trade_data: Dict,
+        include_holder_analysis: bool = True,
+        include_twitter_analysis: bool = True
+    ) -> Dict:
+        """
+        Analyze a token for suspicious activity.
+        
+        Args:
+            token_data: Token metadata and info
+            trade_data: Trading history and metrics
+            include_holder_analysis: Whether to analyze holder distribution
+            include_twitter_analysis: Whether to analyze social media activity
+            
+        Returns:
+            Dict containing analysis results and risk assessment
+        """
+        result = {
+            'is_suspicious': False,
+            'risk_score': 0,
+            'warnings': [],
+            'metrics': {}
+        }
+
+        try:
+            # Basic token checks
+            if not token_data or not trade_data:
+                result['warnings'].append("Insufficient data for complete analysis")
+                result['risk_score'] = 0.5  # Medium risk due to lack of data
+                return result
+
+            # Analyze trading patterns
+            trades = trade_data.get('trades', [])
+            volume_analysis = await self.analyze_volume_patterns(trades)
+            
+            if volume_analysis['is_suspicious']:
+                result['is_suspicious'] = True
+                result['warnings'].extend(volume_analysis['reasons'])
+                result['metrics'].update(volume_analysis['metrics'])
+                result['risk_score'] += 0.3
+
+            # Analyze token supply if holder analysis is requested
+            if include_holder_analysis:
+                initial_transfers = trade_data.get('initial_transfers', [])
+                current_holders = trade_data.get('current_holders', [])
+                
+                supply_analysis = await self.analyze_supply_distribution(
+                    initial_transfers, current_holders
+                )
+                
+                if supply_analysis['is_suspicious']:
+                    result['is_suspicious'] = True
+                    result['warnings'].extend(supply_analysis['reasons'])
+                    result['metrics'].update(supply_analysis['metrics'])
+                    result['risk_score'] += 0.3
+
+            # Analyze market metrics
+            total_supply = float(token_data.get('total_supply', 0))
+            price = float(trade_data.get('latest_price', 0))
+            volume_24h = float(trade_data.get('total_volume', 0))
+            
+            market_analysis = await self.get_market_cap_analysis(
+                total_supply, price, volume_24h
+            )
+            
+            if market_analysis['is_suspicious']:
+                result['is_suspicious'] = True
+                result['warnings'].extend(market_analysis['reasons'])
+                result['metrics'].update(market_analysis['metrics'])
+                result['risk_score'] += 0.2
+
+            # Add social media analysis if requested
+            if include_twitter_analysis and 'social' in token_data:
+                social_data = token_data['social']
+                # Add social media analysis logic here
+                pass
+
+            # Cap risk score at 1.0
+            result['risk_score'] = min(result['risk_score'], 1.0)
+
+            # Add recommendations based on findings
+            result['recommendations'] = self._generate_recommendations(result)
+
+        except Exception as e:
+            result['warnings'].append(f"Error during analysis: {str(e)}")
+            result['risk_score'] = 0.7  # High risk due to analysis error
+
+        return result
+
+    def _generate_recommendations(self, analysis_result: Dict) -> List[str]:
+        """Generate recommendations based on analysis results."""
+        recommendations = []
+        
+        if analysis_result['is_suspicious']:
+            if any('volume' in warning.lower() for warning in analysis_result['warnings']):
+                recommendations.append(
+                    "Exercise caution: Suspicious trading volume patterns detected"
+                )
+            
+            if any('supply' in warning.lower() for warning in analysis_result['warnings']):
+                recommendations.append(
+                    "Be aware: Token supply is highly concentrated"
+                )
+            
+            if any('market' in warning.lower() for warning in analysis_result['warnings']):
+                recommendations.append(
+                    "Warning: Unusual market metrics detected"
+                )
+            
+            if analysis_result['risk_score'] > 0.7:
+                recommendations.append(
+                    "High Risk: Multiple suspicious patterns detected. "
+                    "Thorough due diligence recommended"
+                )
+        else:
+            recommendations.append(
+                "No major suspicious patterns detected. Always conduct your own research"
+            )
+            
+        return recommendations
         
     async def analyze_volume_patterns(self, trades: List[Dict]) -> Dict:
         """
@@ -96,7 +220,7 @@ class SuspiciousActivityAnalyzer:
                         })
                         
         return wash_trades
-
+        
     async def analyze_supply_distribution(
         self,
         initial_transfers: List[Dict],

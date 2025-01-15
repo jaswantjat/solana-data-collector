@@ -19,7 +19,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     REDIS_URL=redis://localhost:6379 \
     REDIS_DB=0 \
     LOG_LEVEL=INFO \
-    PROMETHEUS_PORT=8000
+    PROMETHEUS_PORT=8000 \
+    PORT=10000
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -72,5 +73,8 @@ RUN python test_env.py
 # Switch to non-root user
 USER nobody
 
+# Expose the port
+EXPOSE $PORT
+
 # Command to run the application
-CMD ["python", "-m", "uvicorn", "src.api.dashboard:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["python", "-m", "src.main"]

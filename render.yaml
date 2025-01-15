@@ -9,8 +9,9 @@ services:
     dockerContext: .
     branch: main
     autoDeploy: false
-    healthCheckPath: /api/health
+    healthCheckPath: /
     numInstances: 1
+    startCommand: python -m src.main
     envVars:
       - key: PYTHONPATH
         value: /app
@@ -18,3 +19,29 @@ services:
         value: "3.10.0"
       - key: LOG_LEVEL
         value: INFO
+      - key: RENDER
+        value: "1"
+      - key: PORT
+        value: "10000"
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGHOST
+        sync: false
+      - key: PGPORT
+        value: "6543"  # Render's connection pooler port
+      - key: PGDATABASE
+        sync: false
+      - key: PGSSLMODE
+        value: "require"
+      - key: CONNECT_TIMEOUT
+        value: "30"
+      - key: SQLALCHEMY_POOL_SIZE
+        value: "20"
+      - key: SQLALCHEMY_MAX_OVERFLOW
+        value: "10"
+      - key: SQLALCHEMY_POOL_TIMEOUT
+        value: "30"
+      - key: SQLALCHEMY_POOL_RECYCLE
+        value: "1800"
