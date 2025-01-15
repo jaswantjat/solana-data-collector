@@ -15,23 +15,6 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-def resolve_host_ipv4(hostname: str) -> str:
-    """Resolve hostname to IPv4 address."""
-    try:
-        # Force IPv4
-        addrinfo = socket.getaddrinfo(
-            hostname,
-            None,
-            family=socket.AF_INET,  # IPv4 only
-            type=socket.SOCK_STREAM
-        )
-        if addrinfo:
-            return addrinfo[0][4][0]  # Return the first IPv4 address
-        return hostname
-    except Exception as e:
-        logger.error(f"Failed to resolve {hostname} to IPv4: {e}")
-        return hostname
-
 class DatabaseManager:
     """Manages database connections and sessions."""
 
@@ -43,9 +26,9 @@ class DatabaseManager:
     def _create_connection_url(self) -> URL:
         """Create SQLAlchemy URL object for database connection."""
         try:
-            # Resolve hostname to IPv4
-            host = resolve_host_ipv4(settings.PGHOST)
-            logger.info(f"Resolved database host to: {host}")
+            # Format the host correctly for Supabase
+            host = settings.PGHOST.replace('db.', '')
+            logger.info(f"Using database host: {host}")
 
             # Parse the components from environment variables
             components = {
