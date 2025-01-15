@@ -19,19 +19,22 @@ from typing import Dict, List, Optional, Set
 import asyncio
 from contextlib import asynccontextmanager
 
-from ..models.token_analysis import TokenAnalysis
-from ..monitor.token_monitor import TokenMonitor
-from ..analysis.analysis_tools import AnalysisTools
-from ..reporting.report_generator import ReportGenerator
-from ..security.security_manager import SecurityManager, rate_limit
-from ..monitoring.performance_manager import PerformanceManager
-from ..database.connection import db_manager
-from ..database.models import Token, TokenPrice, TokenHolder, TokenTransaction, WalletAnalysis
-from ..events.event_manager import event_manager
-from .wallet import router as wallet_router
-from .alerts import router as alerts_router
-from .health import router as health_router
-from ..collectors.background_tasks import init_background_tasks
+# Local imports
+from src.models.token_analysis import TokenAnalysis
+from src.monitor.token_monitor import TokenMonitor
+from src.analysis.analysis_tools import AnalysisTools
+from src.reporting.report_generator import ReportGenerator
+from src.security.security_manager import SecurityManager, rate_limit
+from src.monitoring.performance_manager import PerformanceManager
+from src.database.connection import db_manager
+from src.database.models import Token, TokenPrice, TokenHolder, TokenTransaction, WalletAnalysis
+from src.events.event_manager import event_manager
+from src.collectors.background_tasks import init_background_tasks
+
+# API routers
+from src.api.wallet import router as wallet_router
+from src.api.alerts import router as alerts_router
+from src.api.health import router as health_router
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -56,7 +59,7 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Mount static files
-static_dir = Path(__file__).parent.parent / "static"
+static_dir = Path(__file__).parent.parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # Initialize templates
