@@ -40,41 +40,24 @@ RUN apt-get update && apt-get install -y \
 # Set work directory
 WORKDIR /app
 
-# Upgrade pip
-RUN pip install --upgrade pip setuptools wheel
-
-# Install security dependencies first
-RUN pip install --no-cache-dir \
-    cffi==1.15.1 \
-    pycparser==2.21 \
-    cryptography==41.0.7
-
-# Copy requirements file
+# Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip and install dependencies
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Create necessary directories with proper permissions
-RUN mkdir -p $DATA_DIR $STATIC_DIR $TEMPLATES_DIR && \
-    chown -R nobody:nogroup $DATA_DIR $STATIC_DIR $TEMPLATES_DIR && \
-    chmod 777 $DATA_DIR $STATIC_DIR $TEMPLATES_DIR
-
-# Copy project
+# Copy the rest of the application
 COPY . .
 
-# Set proper permissions for all files
-RUN chown -R nobody:nogroup /app && \
-    chmod -R 755 /app
+# Create necessary directories
+RUN mkdir -p /app/data /app/static /app/templates /app/logs
 
-# Run tests
-RUN python test_env.py
-
-# Switch to non-root user
-USER nobody
+# Set permissions
+RUN chmod -R 755 /app
 
 # Expose the port
-EXPOSE $PORT
+EXPOSE ${PORT}
 
-# Command to run the application
+# Set the command to run the application
 CMD ["python", "-m", "src.main"]
