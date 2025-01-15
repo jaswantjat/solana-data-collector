@@ -18,6 +18,8 @@ load_dotenv(os.path.join(project_root, '.env'))
 from src.core.system_integrator import system
 from src.api.server import app
 from src.config import LOG_LEVEL, LOG_FORMAT
+from src.api.errors import APIError, ValidationError, DatabaseError
+from src.utils.logging import get_logger
 
 # Configure logging
 logging.basicConfig(
@@ -29,49 +31,38 @@ logging.basicConfig(
     ]
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 async def run_monitor():
-    """Run the token monitoring system"""
+    """Run the token monitoring system."""
     try:
-        logger.info("Starting Solana Token Monitor...")
-        
-        # Initialize system
-        try:
-            if not await system.initialize():
-                logger.error("System initialization failed")
-                return
-        except Exception as e:
-            logger.error(f"System initialization error: {str(e)}")
-            # Continue running even if system initialization fails
-            # This allows the API to work even if the monitoring system fails
-
-        # Start system operations
         await system.start()
-        
     except Exception as e:
-        logger.error(f"Error in run_monitor: {str(e)}")
-    finally:
-        await system.stop()
-
-def run_api():
-    """Run the FastAPI server"""
-    try:
-        port = int(os.getenv('PORT', '10000'))
-        host = "0.0.0.0" if os.getenv('RENDER', '0') == '1' else "127.0.0.1"
-        
-        # Start the FastAPI server
-        uvicorn.run(
-            "src.api.server:app",
-            host=host,
-            port=port,
-            reload=False,
-            workers=1,
-            log_level=LOG_LEVEL.lower()
+        logger.exception("Failed to start monitoring system")
+        raise APIError(
+            message="Failed to start monitoring system",
+            details={"error": str(e)}
         )
+
+async def run_api():
+    """Run the FastAPI server."""
+    try:
+        config = uvicorn.Config(
+            app=app,
+            host="0.0.0.0",
+            port=int(os.getenv("PORT", 10000)),
+            log_level="info",
+            reload=False
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
     except Exception as e:
-        logger.error(f"Error in run_api: {str(e)}")
+        logger.exception("Failed to start API server")
+        raise APIError(
+            message="Failed to start API server",
+            details={"error": str(e)}
+        )
 
 if __name__ == "__main__":
     # Run the API server directly
-    run_api()
+    asyncio.run(run_api())

@@ -4,6 +4,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field, validator, root_validator
 from decimal import Decimal
 
+from src.api.errors import ValidationError
+
 class TokenInfo(BaseModel):
     """Token information model."""
     address: str = Field(..., description="Token address", min_length=44, max_length=44)
@@ -15,7 +17,10 @@ class TokenInfo(BaseModel):
     def validate_address(cls, v):
         """Validate Solana address format."""
         if not v.isalnum():
-            raise ValueError("Token address must be alphanumeric")
+            raise ValidationError(
+                message="Token address must be alphanumeric",
+                details={"address": v}
+            )
         return v
 
 class PriceInfo(BaseModel):
@@ -30,7 +35,10 @@ class PriceInfo(BaseModel):
         """Validate price-related data."""
         if values.get('market_cap') is not None and values.get('price'):
             if values['market_cap'] < values['price']:
-                raise ValueError("Market cap cannot be less than price")
+                raise ValidationError(
+                    message="Market cap cannot be less than price",
+                    details={"market_cap": values['market_cap'], "price": values['price']}
+                )
         return values
 
 class TokenAnalysisRequest(BaseModel):
@@ -43,16 +51,20 @@ class TokenAnalysisRequest(BaseModel):
     def validate_token_address(cls, v):
         """Validate Solana token address."""
         if not v.isalnum():
-            raise ValueError("Token address must be alphanumeric")
+            raise ValidationError(
+                message="Token address must be alphanumeric",
+                details={"token_address": v}
+            )
         return v
 
     @validator('time_range')
     def validate_time_range(cls, v):
         """Validate time range format."""
-        if v is not None:
-            valid_ranges = ['1h', '24h', '7d', '30d', '90d', '1y']
-            if v not in valid_ranges:
-                raise ValueError(f"Time range must be one of: {', '.join(valid_ranges)}")
+        if v is not None and v not in ['1d', '7d', '30d', '90d']:
+            raise ValidationError(
+                message="Invalid time range",
+                details={"time_range": v, "allowed_values": ['1d', '7d', '30d', '90d']}
+            )
         return v
 
 class TokenAnalysisResponse(BaseModel):
@@ -73,9 +85,15 @@ class TokenAnalysisResponse(BaseModel):
         if v is not None:
             for entry in v:
                 if 'timestamp' not in entry or 'price' not in entry:
-                    raise ValueError("Price history entries must contain 'timestamp' and 'price'")
-                if entry.get('price', 0) < 0:
-                    raise ValueError("Price cannot be negative")
+                    raise ValidationError(
+                        message="Invalid price history entry",
+                        details={"entry": entry, "required_fields": ['timestamp', 'price']}
+                    )
+                if entry['price'] < 0:
+                    raise ValidationError(
+                        message="Price cannot be negative",
+                        details={"price": entry['price']}
+                    )
         return v
 
 class WalletAnalysisRequest(BaseModel):
@@ -88,16 +106,20 @@ class WalletAnalysisRequest(BaseModel):
     def validate_wallet_address(cls, v):
         """Validate Solana wallet address."""
         if not v.isalnum():
-            raise ValueError("Wallet address must be alphanumeric")
+            raise ValidationError(
+                message="Wallet address must be alphanumeric",
+                details={"wallet_address": v}
+            )
         return v
 
     @validator('time_range')
     def validate_time_range(cls, v):
         """Validate time range format."""
-        if v is not None:
-            valid_ranges = ['1h', '24h', '7d', '30d', '90d', '1y']
-            if v not in valid_ranges:
-                raise ValueError(f"Time range must be one of: {', '.join(valid_ranges)}")
+        if v is not None and v not in ['1d', '7d', '30d', '90d']:
+            raise ValidationError(
+                message="Invalid time range",
+                details={"time_range": v, "allowed_values": ['1d', '7d', '30d', '90d']}
+            )
         return v
 
 class TransactionInfo(BaseModel):
@@ -112,17 +134,23 @@ class TransactionInfo(BaseModel):
     @validator('type')
     def validate_type(cls, v):
         """Validate transaction type."""
-        valid_types = ['transfer', 'swap', 'mint', 'burn', 'stake', 'unstake', 'other']
-        if v not in valid_types:
-            raise ValueError(f"Transaction type must be one of: {', '.join(valid_types)}")
+        allowed_types = ['transfer', 'swap', 'mint', 'burn', 'other']
+        if v not in allowed_types:
+            raise ValidationError(
+                message="Invalid transaction type",
+                details={"type": v, "allowed_types": allowed_types}
+            )
         return v
 
     @validator('status')
     def validate_status(cls, v):
         """Validate transaction status."""
-        valid_statuses = ['success', 'failed', 'pending']
-        if v not in valid_statuses:
-            raise ValueError(f"Status must be one of: {', '.join(valid_statuses)}")
+        allowed_statuses = ['success', 'failed', 'pending']
+        if v not in allowed_statuses:
+            raise ValidationError(
+                message="Invalid transaction status",
+                details={"status": v, "allowed_statuses": allowed_statuses}
+            )
         return v
 
 class WalletAnalysisResponse(BaseModel):
@@ -139,7 +167,10 @@ class WalletAnalysisResponse(BaseModel):
         """Validate token balances."""
         for token, amount in v.items():
             if amount < 0:
-                raise ValueError(f"Balance for token {token} cannot be negative")
+                raise ValidationError(
+                    message="Token balance cannot be negative",
+                    details={"token": token, "balance": amount}
+                )
         return v
 
 class PerformanceMetrics(BaseModel):
@@ -152,13 +183,15 @@ class PerformanceMetrics(BaseModel):
     error_count: int = Field(..., description="Total error count", ge=0)
     cache_hit_ratio: Optional[float] = Field(None, description="Cache hit ratio", ge=0, le=1)
 
-    @root_validator
-    def validate_metrics(cls, values):
+    @validator('cpu_usage', 'memory_usage', 'disk_usage')
+    def validate_metrics(cls, v, field):
         """Validate performance metrics."""
-        for field in ['cpu_usage', 'memory_usage', 'disk_usage']:
-            if values.get(field) is not None and values[field] > 100:
-                raise ValueError(f"{field} cannot exceed 100%")
-        return values
+        if v < 0 or v > 100:
+            raise ValidationError(
+                message=f"{field.name} must be between 0 and 100",
+                details={field.name: v}
+            )
+        return v
 
 class ErrorResponse(BaseModel):
     """Error response model."""
