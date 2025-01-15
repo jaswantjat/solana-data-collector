@@ -18,16 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install cryptography and its dependencies first
-RUN pip install --no-cache-dir \
-    setuptools \
-    wheel \
-    cffi \
-    pycparser \
-    cryptography==41.0.7
-
-# Install remaining Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies with specific flags for cryptography
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir --no-binary cryptography -r requirements.txt
 
 # Copy application code
 COPY . .
