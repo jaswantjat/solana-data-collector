@@ -1,10 +1,13 @@
 """Custom error classes for the API."""
 from typing import Dict, Optional, Any
-from fastapi import HTTPException, status
 from datetime import datetime
-import logging
+from fastapi import HTTPException, status
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 class APIError(HTTPException):
     """Base class for API errors."""
@@ -26,7 +29,8 @@ class APIError(HTTPException):
             detail={
                 "message": message,
                 "error_type": self.__class__.__name__,
-                "details": details
+                "details": details,
+                "timestamp": datetime.utcnow().isoformat()
             }
         )
 
@@ -118,47 +122,48 @@ def setup_error_handlers(app):
         app: FastAPI application instance
     """
     @app.exception_handler(APIError)
-    async def api_error_handler(request, exc):
+    async def api_error_handler(request, exc: APIError):
         """Handle API errors."""
-        return {
-            "status": "error",
-            "message": exc.detail["message"],
-            "error_type": exc.detail["error_type"],
-            "details": exc.detail["details"],
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=exc.detail
+        )
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(request, exc):
+    async def validation_error_handler(request, exc: RequestValidationError):
         """Handle request validation errors."""
-        return {
-            "status": "error",
-            "message": "Request validation failed",
-            "error_type": "ValidationError",
-            "details": {
-                "errors": [
-                    {
-                        "loc": err["loc"],
-                        "msg": err["msg"],
-                        "type": err["type"]
-                    }
-                    for err in exc.errors()
-                ]
-            },
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "message": "Request validation failed",
+                "error_type": "ValidationError",
+                "details": {
+                    "errors": [
+                        {
+                            "loc": list(err["loc"]),
+                            "msg": err["msg"],
+                            "type": err["type"]
+                        }
+                        for err in exc.errors()
+                    ]
+                },
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
 
     @app.exception_handler(Exception)
-    async def general_error_handler(request, exc):
+    async def general_error_handler(request, exc: Exception):
         """Handle unexpected errors."""
         logger.exception("Unexpected error occurred")
-        return {
-            "status": "error",
-            "message": "An unexpected error occurred",
-            "error_type": "InternalServerError",
-            "details": {
-                "type": type(exc).__name__,
-                "message": str(exc)
-            } if app.debug else None,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "message": "An unexpected error occurred",
+                "error_type": "InternalServerError",
+                "details": {
+                    "type": type(exc).__name__,
+                    "message": str(exc)
+                } if app.debug else None,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
