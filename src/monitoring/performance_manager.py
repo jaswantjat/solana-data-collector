@@ -1,317 +1,498 @@
+"""Performance monitoring and metrics tracking."""
 import os
-import logging
 import time
 import asyncio
 import psutil
 import redis.asyncio as redis
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import defaultdict
 import json
 from pathlib import Path
 import numpy as np
 from prometheus_client import Counter, Gauge, Histogram, start_http_server, REGISTRY
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger, LogContext, log_error
+from src.api.errors import DatabaseError, ConfigError, ServiceUnavailableError
+
+logger = get_logger(__name__)
 
 @dataclass
 class PerformanceMetrics:
-    response_time: float
-    cpu_usage: float
-    memory_usage: float
-    cache_hit_rate: float
+    """Data class for performance metrics."""
+    response_time: float = 0.0
+    cpu_usage: float = 0.0
+    memory_usage: float = 0.0
+    cache_hit_rate: float = 0.0
+    request_count: int = 0
+    error_count: int = 0
+    last_update: datetime = field(default_factory=datetime.utcnow)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to dictionary."""
+        return {
+            "response_time": self.response_time,
+            "cpu_usage": self.cpu_usage,
+            "memory_usage": self.memory_usage,
+            "cache_hit_rate": self.cache_hit_rate,
+            "request_count": self.request_count,
+            "error_count": self.error_count,
+            "last_update": self.last_update.isoformat()
+        }
 
 class PerformanceManager:
+    """Manages performance monitoring and metrics tracking."""
+    
     _instance = None
     _initialized = False
+    _lock = asyncio.Lock()
 
     def __new__(cls):
-        if cls._instance is None:
+        if not cls._instance:
             cls._instance = super().__new__(cls)
         return cls._instance
 
     def __init__(self):
         if not self._initialized:
-            self.redis = None
-            self._init_metrics()
-            self.metrics_history = defaultdict(list)
-            self.cache = {}
-            self.cache_config = self._load_cache_config()
+            # Redis client
+            self.redis: Optional[redis.Redis] = None
             
-            # Initialize Prometheus metrics
+            # Metrics storage
+            self.metrics_history: Dict[str, List[float]] = defaultdict(list)
+            self.current_metrics = PerformanceMetrics()
+            
+            # Cache settings
+            self.cache_config = self._load_cache_config()
+            self.cache: Dict[str, Any] = {}
+            self.cache_hits = 0
+            self.cache_misses = 0
+            
+            # Prometheus metrics
             self._init_prometheus_metrics()
+            
+            # Async event loop
+            self.loop = asyncio.get_event_loop()
             
             self._initialized = True
 
-    async def initialize(self):
-        try:
-            await self._init_redis()
-            logger.info("Performance manager initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize performance manager: {str(e)}")
-            raise
-
-    def _init_metrics(self):
-        self.metrics = {
-            "response_times": [],
-            "cpu_usage": [],
-            "memory_usage": [],
-            "active_connections": 0,
-            "cache_hits": 0,
-            "cache_misses": 0,
-            "errors": defaultdict(int)
-        }
-        
-    def _init_prometheus_metrics(self):
-        try:
-            self.response_time_histogram = Histogram(
-                'response_time_seconds',
-                'Request response time in seconds',
-                ['endpoint']
-            )
-            self.active_connections_gauge = Gauge(
-                'active_connections',
-                'Number of active connections'
-            )
-            self.cache_hit_rate_gauge = Gauge(
-                'cache_hit_rate',
-                'Cache hit rate percentage'
-            )
-            self.error_counter = Counter(
-                'error_count',
-                'Number of errors',
-                ['type']
-            )
-        except ValueError:
-            logger.warning("Prometheus metrics already registered, retrieving from registry")
-            for metric in REGISTRY.collect():
-                if metric.name == 'response_time_seconds':
-                    self.response_time_histogram = metric
-                elif metric.name == 'active_connections':
-                    self.active_connections_gauge = metric
-                elif metric.name == 'cache_hit_rate':
-                    self.cache_hit_rate_gauge = metric
-                elif metric.name == 'error_count':
-                    self.error_counter = metric
-            
-        try:
-            start_http_server(8000)
-            logger.info("Prometheus metrics server started on port 8000")
-        except Exception as e:
-            logger.error(f"Failed to start Prometheus server: {e}")
-            
     async def _init_redis(self):
-        max_retries = 3
-        retry_delay = 5  # seconds
-        
-        redis_url = os.getenv("REDIS_URL", "redis://localhost")
-        
-        for attempt in range(max_retries):
+        """Initialize Redis connection."""
+        with LogContext(logger, component="redis", action="init"):
             try:
-                self.redis = redis.from_url(redis_url, decode_responses=True)
-                # Test the connection
-                await self.redis.ping()
-                logger.info("Successfully connected to Redis")
-                break
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"Failed to connect to Redis (attempt {attempt + 1}/{max_retries}): {e}")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    logger.error(f"Failed to connect to Redis after {max_retries} attempts: {e}")
-                    self.redis = None
+                # Get Redis configuration from environment
+                redis_host = os.environ.get('REDIS_HOST', 'localhost')
+                redis_port = int(os.environ.get('REDIS_PORT', '6379'))
+                redis_password = os.environ.get('REDIS_PASSWORD', '')
+                redis_db = int(os.environ.get('REDIS_DB', '0'))
+                max_retries = 3
+                retry_delay = 5  # seconds
 
-    def _load_cache_config(self) -> Dict:
-        try:
-            config_path = Path(__file__).parent.parent / "config" / "cache_config.json"
-            if config_path.exists():
-                with open(config_path, 'r') as f:
-                    return json.load(f)
-            return {
-                "max_size": 1000,
-                "ttl": 3600,
-                "cleanup_interval": 300
-            }
-        except Exception as e:
-            logger.error(f"Error loading cache config: {str(e)}")
-            return {
-                "max_size": 1000,
-                "ttl": 3600,
-                "cleanup_interval": 300
-            }
-            
-    async def monitor_system_health(self):
-        while True:
-            try:
-                cpu_percent = psutil.cpu_percent(interval=1)
-                memory = psutil.virtual_memory()
-                disk = psutil.disk_usage('/')
-                
-                Gauge('cpu_usage_percent', 'CPU usage percentage').set(cpu_percent)
-                Gauge('memory_usage_percent', 'Memory usage percentage').set(memory.percent)
-                Gauge('disk_usage_percent', 'Disk usage percentage').set(disk.percent)
-                
-                timestamp = datetime.now().isoformat()
-                self.metrics_history["cpu"].append((timestamp, cpu_percent))
-                self.metrics_history["memory"].append((timestamp, memory.percent))
-                self.metrics_history["disk"].append((timestamp, disk.percent))
-                
-                self._cleanup_metrics_history()
-                
-                await self._check_system_alerts({
-                    "cpu": cpu_percent,
-                    "memory": memory.percent,
-                    "disk": disk.percent
-                })
-                
-                await asyncio.sleep(60)  
+                # Handle Render environment
+                if os.environ.get('RENDER') == '1':
+                    redis_host = os.environ.get('REDIS_HOST', 'redis')
+                    redis_port = int(os.environ.get('REDIS_PORT', '6379'))
+
+                for attempt in range(max_retries):
+                    try:
+                        # Create Redis client
+                        self.redis = redis.Redis(
+                            host=redis_host,
+                            port=redis_port,
+                            password=redis_password,
+                            db=redis_db,
+                            decode_responses=True,
+                            socket_timeout=5,
+                            socket_connect_timeout=5
+                        )
+                        
+                        # Test connection
+                        await self.redis.ping()
+                        logger.info(
+                            "Connected to Redis",
+                            extra={
+                                "host": redis_host,
+                                "port": redis_port,
+                                "db": redis_db
+                            }
+                        )
+                        return
+                        
+                    except redis.ConnectionError as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(
+                                f"Failed to connect to Redis (attempt {attempt + 1}/{max_retries})",
+                                extra={
+                                    "host": redis_host,
+                                    "port": redis_port,
+                                    "error": str(e),
+                                    "attempt": attempt + 1,
+                                    "max_retries": max_retries
+                                }
+                            )
+                            await asyncio.sleep(retry_delay)
+                        else:
+                            log_error(
+                                logger,
+                                e,
+                                f"Failed to connect to Redis after {max_retries} attempts",
+                                context={
+                                    "host": redis_host,
+                                    "port": redis_port,
+                                    "max_retries": max_retries
+                                }
+                            )
+                            # Continue without Redis
+                            self.redis = None
+                            
             except Exception as e:
-                logger.error(f"Error monitoring system health: {str(e)}")
-                await asyncio.sleep(60)
-                
-    def _cleanup_metrics_history(self):
-        try:
-            cutoff = datetime.now() - timedelta(days=7)
-            for metric_type in self.metrics_history:
-                self.metrics_history[metric_type] = [
-                    (ts, val) for ts, val in self.metrics_history[metric_type]
-                    if datetime.fromisoformat(ts) > cutoff
-                ]
-        except Exception as e:
-            logger.error(f"Error cleaning up metrics history: {str(e)}")
-            
-    async def _check_system_alerts(self, metrics: Dict):
-        try:
-            alerts = []
-            
-            if metrics["cpu"] > 80:
-                alerts.append(("HIGH_CPU", f"CPU usage at {metrics['cpu']}%"))
-                
-            if metrics["memory"] > 80:
-                alerts.append(("HIGH_MEMORY", f"Memory usage at {metrics['memory']}%"))
-                
-            if metrics["disk"] > 80:
-                alerts.append(("HIGH_DISK", f"Disk usage at {metrics['disk']}%"))
-                
-            if alerts:
-                await self._send_system_alerts(alerts)
-                
-        except Exception as e:
-            logger.error(f"Error checking system alerts: {str(e)}")
-            
-    async def _send_system_alerts(self, alerts: List[tuple]):
-        try:
-            for alert_type, message in alerts:
-                logger.warning(f"System Alert - {alert_type}: {message}")
-                
-        except Exception as e:
-            logger.error(f"Error sending system alerts: {str(e)}")
-            
-    async def record_response_time(self, endpoint: str, response_time: float):
-        try:
-            self.response_time_histogram.labels(endpoint).observe(response_time)
-            self.metrics["response_times"].append((endpoint, response_time))
-            
-            avg_time = np.mean([t for _, t in self.metrics["response_times"]])
-            Gauge('average_response_time_seconds', 'Average response time in seconds').set(avg_time)
-            
-        except Exception as e:
-            logger.error(f"Error recording response time: {str(e)}")
-            
-    def update_connection_count(self, delta: int):
-        try:
-            self.metrics["active_connections"] += delta
-            self.active_connections_gauge.set(self.metrics["active_connections"])
-        except Exception as e:
-            logger.error(f"Error updating connection count: {str(e)}")
-            
-    async def get_cached_data(self, key: str) -> Optional[Dict]:
-        try:
-            if key in self.cache:
-                data, expiry = self.cache[key]
-                if expiry > time.time():
-                    self.metrics["cache_hits"] += 1
-                    self._update_cache_metrics()
-                    return data
+                log_error(
+                    logger,
+                    e,
+                    "Error initializing Redis",
+                    context={
+                        "host": redis_host,
+                        "port": redis_port
+                    }
+                )
+                self.redis = None
+                raise DatabaseError(
+                    message="Failed to initialize Redis connection",
+                    details={"error": str(e)}
+                )
+
+    def _load_cache_config(self) -> Dict[str, Any]:
+        """Load cache configuration from file."""
+        with LogContext(logger, component="cache", action="load_config"):
+            try:
+                config_path = Path("config/cache_config.json")
+                if not config_path.exists():
+                    default_config = {
+                        "max_size": 1000,
+                        "ttl": 3600,
+                        "cleanup_interval": 300
+                    }
+                    config_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(config_path, "w") as f:
+                        json.dump(default_config, f, indent=2)
+                    return default_config
                     
-            self.metrics["cache_misses"] += 1
-            self._update_cache_metrics()
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error accessing cache: {str(e)}")
-            return None
-            
-    async def set_cached_data(self, key: str, data: Dict, ttl: Optional[int] = None):
-        try:
-            if ttl is None:
-                ttl = self.cache_config["ttl"]
+                with open(config_path) as f:
+                    return json.load(f)
+                    
+            except Exception as e:
+                log_error(
+                    logger,
+                    e,
+                    "Failed to load cache config",
+                    context={"config_path": str(config_path)}
+                )
+                raise ConfigError(
+                    message="Failed to load cache configuration",
+                    details={"error": str(e)}
+                )
+
+    def _init_prometheus_metrics(self):
+        """Initialize Prometheus metrics."""
+        with LogContext(logger, component="prometheus", action="init"):
+            try:
+                # Clear any existing metrics
+                for collector in list(REGISTRY._collector_to_names.keys()):
+                    REGISTRY.unregister(collector)
                 
-            self.cache[key] = (data, time.time() + ttl)
-            
-            if len(self.cache) > self.cache_config["max_size"]:
-                await self._cleanup_cache()
+                # Request metrics
+                self.request_counter = Counter(
+                    "api_requests_total",
+                    "Total number of API requests",
+                    ["endpoint"]
+                )
+                self.error_counter = Counter(
+                    "api_errors_total",
+                    "Total number of API errors",
+                    ["endpoint", "error_type"]
+                )
                 
-        except Exception as e:
-            logger.error(f"Error setting cache: {str(e)}")
-            
+                # Performance metrics
+                self.response_time = Histogram(
+                    "api_response_time_seconds",
+                    "API response time in seconds",
+                    ["endpoint"],
+                    buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+                )
+                self.cpu_usage = Gauge(
+                    "system_cpu_usage_percent",
+                    "System CPU usage percentage"
+                )
+                self.memory_usage = Gauge(
+                    "system_memory_usage_bytes",
+                    "System memory usage in bytes"
+                )
+                
+                # Cache metrics
+                self.cache_hits = Counter(
+                    "cache_hits_total",
+                    "Total number of cache hits"
+                )
+                self.cache_misses = Counter(
+                    "cache_misses_total",
+                    "Total number of cache misses"
+                )
+                
+            except Exception as e:
+                log_error(
+                    logger,
+                    e,
+                    "Failed to initialize Prometheus metrics"
+                )
+                raise ConfigError(
+                    message="Failed to initialize Prometheus metrics",
+                    details={"error": str(e)}
+                )
+
+    async def initialize(self):
+        """Initialize the performance manager."""
+        with LogContext(logger, component="performance_manager", action="init"):
+            try:
+                # Initialize Redis
+                await self._init_redis()
+                
+                # Start background tasks
+                self.loop.create_task(self._cleanup_cache())
+                self.loop.create_task(self._update_system_metrics())
+                
+                # Start Prometheus server if enabled
+                if os.environ.get('ENABLE_PROMETHEUS', 'false').lower() == 'true':
+                    prometheus_port = int(os.environ.get('PROMETHEUS_PORT', '9090'))
+                    start_http_server(prometheus_port)
+                    logger.info(
+                        "Started Prometheus server",
+                        extra={"port": prometheus_port}
+                    )
+                
+                logger.info("Performance manager initialized successfully")
+                
+            except Exception as e:
+                log_error(
+                    logger,
+                    e,
+                    "Failed to initialize performance manager"
+                )
+                raise ConfigError(
+                    message="Performance manager initialization failed",
+                    details={"error": str(e)}
+                )
+
     async def _cleanup_cache(self):
-        try:
-            current_time = time.time()
-            expired_keys = [
-                k for k, (_, exp) in self.cache.items()
-                if exp <= current_time
-            ]
-            
-            for k in expired_keys:
-                del self.cache[k]
+        """Periodically clean up expired cache entries."""
+        with LogContext(logger, component="cache", action="cleanup"):
+            while True:
+                try:
+                    current_time = time.time()
+                    expired_keys = [
+                        key for key, (value, timestamp) in self.cache.items()
+                        if current_time - timestamp > self.cache_config["ttl"]
+                    ]
+                    
+                    for key in expired_keys:
+                        del self.cache[key]
+                        
+                    # Trim cache if it exceeds max size
+                    while len(self.cache) > self.cache_config["max_size"]:
+                        # Remove oldest entry
+                        oldest_key = min(
+                            self.cache.items(),
+                            key=lambda x: x[1][1]
+                        )[0]
+                        del self.cache[oldest_key]
+                        
+                    await asyncio.sleep(self.cache_config["cleanup_interval"])
+                    
+                except Exception as e:
+                    log_error(
+                        logger,
+                        e,
+                        "Cache cleanup error",
+                        context={
+                            "cache_size": len(self.cache),
+                            "expired_keys": len(expired_keys)
+                        }
+                    )
+                    await asyncio.sleep(60)  # Retry after a minute
+
+    async def _update_system_metrics(self):
+        """Periodically update system metrics."""
+        with LogContext(logger, component="metrics", action="update"):
+            while True:
+                try:
+                    # Update CPU and memory metrics
+                    cpu_percent = psutil.cpu_percent()
+                    memory = psutil.virtual_memory()
+                    
+                    self.cpu_usage.set(cpu_percent)
+                    self.memory_usage.set(memory.used)
+                    
+                    # Update current metrics
+                    self.current_metrics.cpu_usage = cpu_percent
+                    self.current_metrics.memory_usage = memory.percent
+                    self.current_metrics.last_update = datetime.utcnow()
+                    
+                    # Store in history
+                    self.metrics_history["cpu_usage"].append(cpu_percent)
+                    self.metrics_history["memory_usage"].append(memory.percent)
+                    
+                    # Keep last hour of history
+                    max_history = 3600  # 1 hour at 1 second intervals
+                    for metric_list in self.metrics_history.values():
+                        if len(metric_list) > max_history:
+                            metric_list.pop(0)
+                    
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    log_error(
+                        logger,
+                        e,
+                        "System metrics update error"
+                    )
+                    await asyncio.sleep(60)  # Retry after a minute
+
+    async def record_request(
+        self,
+        endpoint: str,
+        response_time: float,
+        error: Optional[str] = None
+    ):
+        """Record API request metrics.
+        
+        Args:
+            endpoint: API endpoint
+            response_time: Request response time in seconds
+            error: Error message if request failed
+        """
+        with LogContext(logger, component="metrics", action="record_request", endpoint=endpoint):
+            try:
+                # Update Prometheus metrics
+                self.request_counter.labels(endpoint=endpoint).inc()
+                self.response_time.labels(endpoint=endpoint).observe(response_time)
                 
-        except Exception as e:
-            logger.error(f"Error cleaning up cache: {str(e)}")
+                if error:
+                    self.error_counter.labels(
+                        endpoint=endpoint,
+                        error_type=type(error).__name__
+                    ).inc()
+                    self.current_metrics.error_count += 1
+                
+                # Update current metrics
+                self.current_metrics.request_count += 1
+                self.current_metrics.response_time = (
+                    (self.current_metrics.response_time * (self.current_metrics.request_count - 1) +
+                    response_time) / self.current_metrics.request_count
+                )
+                
+                # Store in Redis if available
+                if self.redis:
+                    await self.redis.hincrby(f"metrics:{endpoint}", "request_count", 1)
+                    await self.redis.hset(
+                        f"metrics:{endpoint}",
+                        "last_response_time",
+                        str(response_time)
+                    )
+                    if error:
+                        await self.redis.hincrby(f"metrics:{endpoint}", "error_count", 1)
+                        
+            except Exception as e:
+                log_error(
+                    logger,
+                    e,
+                    "Failed to record request metrics",
+                    context={
+                        "endpoint": endpoint,
+                        "response_time": response_time,
+                        "error": error
+                    }
+                )
+
+    async def get_cache(self, key: str) -> Optional[Any]:
+        """Get value from cache.
+        
+        Args:
+            key: Cache key
             
-    def _update_cache_metrics(self):
-        try:
-            total_requests = self.metrics["cache_hits"] + self.metrics["cache_misses"]
-            if total_requests > 0:
-                hit_rate = (self.metrics["cache_hits"] / total_requests) * 100
-                self.cache_hit_rate_gauge.set(hit_rate)
-        except Exception as e:
-            logger.error(f"Error updating cache metrics: {str(e)}")
-            
-    def record_error(self, error_type: str):
-        try:
-            self.metrics["errors"][error_type] += 1
-            self.error_counter.labels(type=error_type).inc()
-        except Exception as e:
-            logger.error(f"Error recording error: {str(e)}")
-            
+        Returns:
+            Cached value if found and not expired
+        """
+        with LogContext(logger, component="cache", action="get", key=key):
+            try:
+                if key in self.cache:
+                    value, timestamp = self.cache[key]
+                    if time.time() - timestamp <= self.cache_config["ttl"]:
+                        self.cache_hits.inc()
+                        return value
+                        
+                self.cache_misses.inc()
+                return None
+                
+            except Exception as e:
+                log_error(
+                    logger,
+                    e,
+                    "Cache get error",
+                    context={"key": key}
+                )
+                return None
+
+    async def set_cache(self, key: str, value: Any):
+        """Set cache value.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        with LogContext(logger, component="cache", action="set", key=key):
+            try:
+                async with self._lock:
+                    self.cache[key] = (value, time.time())
+                    
+                    # Update cache hit rate
+                    total_requests = self.cache_hits._value.get() + self.cache_misses._value.get()
+                    if total_requests > 0:
+                        self.current_metrics.cache_hit_rate = (
+                            self.cache_hits._value.get() / total_requests
+                        )
+                        
+            except Exception as e:
+                log_error(
+                    logger,
+                    e,
+                    "Cache set error",
+                    context={"key": key}
+                )
+
     async def get_performance_metrics(self) -> PerformanceMetrics:
-        try:
-            avg_response_time = np.mean([t for _, t in self.metrics["response_times"]]) if self.metrics["response_times"] else 0
-            cpu_usage = psutil.cpu_percent()
-            memory = psutil.virtual_memory()
-            total_requests = self.metrics["cache_hits"] + self.metrics["cache_misses"]
-            cache_hit_rate = (self.metrics["cache_hits"] / total_requests * 100) if total_requests > 0 else 0
-            
-            return PerformanceMetrics(
-                response_time=avg_response_time,
-                cpu_usage=cpu_usage,
-                memory_usage=memory.percent,
-                cache_hit_rate=cache_hit_rate
-            )
-            
-        except Exception as e:
-            logger.error(f"Error getting performance metrics: {str(e)}")
-            return None
-            
-    async def get_metrics_history(self, metric_type: str, duration_hours: int = 24) -> List[tuple]:
-        try:
-            cutoff = datetime.now() - timedelta(hours=duration_hours)
-            return [
-                (ts, val) for ts, val in self.metrics_history[metric_type]
-                if datetime.fromisoformat(ts) > cutoff
-            ]
-        except Exception as e:
-            logger.error(f"Error getting metrics history: {str(e)}")
-            return []
+        """Get current performance metrics.
+        
+        Returns:
+            PerformanceMetrics object with current metrics
+        """
+        with LogContext(logger, component="metrics", action="get"):
+            return self.current_metrics
+
+    async def cleanup(self):
+        """Cleanup resources."""
+        with LogContext(logger, component="performance_manager", action="cleanup"):
+            try:
+                if self.redis:
+                    await self.redis.close()
+                self.cache.clear()
+                self.metrics_history.clear()
+                logger.info("PerformanceManager cleanup completed")
+            except Exception as e:
+                log_error(
+                    logger,
+                    e,
+                    "Cleanup error"
+                )
+                raise ServiceUnavailableError(
+                    message="Failed to cleanup performance manager",
+                    details={"error": str(e)}
+                )
