@@ -21,19 +21,13 @@ logger = logging.getLogger(__name__)
 FERNET_AVAILABLE = False
 try:
     from cryptography.fernet import Fernet
-    # Verify Fernet is actually working
-    test_key = Fernet.generate_key()
-    test_fernet = Fernet(test_key)
-    test_data = b"test"
-    test_fernet.encrypt(test_data)
     FERNET_AVAILABLE = True
-    logger.info("Cryptography module successfully loaded and verified")
+    logger.info("Successfully imported cryptography.fernet")
 except ImportError as e:
-    logger.error(f"Failed to import cryptography module: {e}")
+    logger.error(f"Failed to import cryptography: {str(e)}")
     logger.error("Please ensure cryptography is installed: pip install cryptography==41.0.7")
 except Exception as e:
-    logger.error(f"Cryptography module failed verification: {e}")
-    logger.error("Cryptography module installed but not working correctly")
+    logger.error(f"Unexpected error importing cryptography: {str(e)}")
 
 # Try importing Redis with error handling
 try:
