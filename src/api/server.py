@@ -17,6 +17,12 @@ from src.database.connection import db_manager
 from src.utils.logging import get_logger
 from src.api.middleware import setup_middleware
 from src.api.health import router as health_router
+from src.api.errors import (
+    setup_error_handlers,
+    NotFoundError,
+    ValidationAPIError,
+    DatabaseError
+)
 
 # Configure logging
 logger = get_logger(__name__)
@@ -40,8 +46,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Set up custom middleware
+# Set up middleware and error handlers
 setup_middleware(app)
+setup_error_handlers(app)
 
 # Include routers
 app.include_router(health_router, prefix="/health", tags=["Health"])
@@ -99,7 +106,7 @@ async def startup_event():
         logger.info("API server started successfully")
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
-        raise
+        raise DatabaseError("Failed to initialize services", {"error": str(e)})
 
 @app.get("/")
 async def root():
@@ -127,6 +134,12 @@ async def analyze_token(
             db_session=db
         )
         
+        if not analysis_result:
+            raise NotFoundError(
+                f"Token {request.token_address} not found",
+                {"token_address": request.token_address}
+            )
+        
         return TokenAnalysisResponse(
             token_address=request.token_address,
             is_suspicious=analysis_result.is_suspicious,
@@ -137,7 +150,12 @@ async def analyze_token(
         
     except Exception as e:
         logger.error(f"Error analyzing token {request.token_address}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, NotFoundError):
+            raise
+        raise DatabaseError(
+            "Failed to analyze token",
+            {"token_address": request.token_address, "error": str(e)}
+        )
 
 @app.post("/analyze/wallet", response_model=WalletAnalysisResponse)
 async def analyze_wallet(
@@ -151,10 +169,22 @@ async def analyze_wallet(
             request.wallet_address,
             include_history=request.include_transaction_history
         )
+        
+        if not analysis:
+            raise NotFoundError(
+                f"Wallet {request.wallet_address} not found",
+                {"wallet_address": request.wallet_address}
+            )
+            
         return analysis
     except Exception as e:
         logger.error(f"Error analyzing wallet {request.wallet_address}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, NotFoundError):
+            raise
+        raise DatabaseError(
+            "Failed to analyze wallet",
+            {"wallet_address": request.wallet_address, "error": str(e)}
+        )
 
 @app.get("/blacklist/stats", response_model=BlacklistInfo)
 async def get_blacklist_stats(db=Depends(get_db)):
@@ -164,7 +194,7 @@ async def get_blacklist_stats(db=Depends(get_db)):
         return BlacklistInfo(**stats)
     except Exception as e:
         logger.error(f"Error getting blacklist stats: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise DatabaseError("Failed to get blacklist stats", {"error": str(e)})
 
 @app.get("/monitor/status")
 async def get_monitor_status(db=Depends(get_db)):
@@ -178,17 +208,30 @@ async def get_monitor_status(db=Depends(get_db)):
         }
     except Exception as e:
         logger.error(f"Error getting monitor status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise DatabaseError("Failed to get monitor status", {"error": str(e)})
 
 @app.get("/token/{token_address}")
 async def get_token_data(token_address: str, db=Depends(get_db)):
     """Gather all relevant data for a token."""
     try:
         collector = TokenLaunchCollector(db_session=db)
-        return await collector.get_token_data(token_address)
+        token_data = await collector.get_token_data(token_address)
+        
+        if not token_data:
+            raise NotFoundError(
+                f"Token {token_address} not found",
+                {"token_address": token_address}
+            )
+            
+        return token_data
     except Exception as e:
         logger.error(f"Error getting token data for {token_address}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, NotFoundError):
+            raise
+        raise DatabaseError(
+            "Failed to get token data",
+            {"token_address": token_address, "error": str(e)}
+        )
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
