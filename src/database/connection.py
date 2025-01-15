@@ -1,6 +1,7 @@
 """Database connection management."""
 import logging
 import time
+import os
 from typing import Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -8,22 +9,11 @@ from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from sqlalchemy.orm import sessionmaker, Session
 import backoff
 
-from ..config import (
-    PGUSER,
-    PGPASSWORD,
-    PGHOST,
-    PGPORT,
-    PGDATABASE,
-    PGSSLMODE,
-    CONNECT_TIMEOUT,
-    SQLALCHEMY_POOL_SIZE,
-    SQLALCHEMY_MAX_OVERFLOW,
-    SQLALCHEMY_POOL_TIMEOUT,
-    SQLALCHEMY_POOL_RECYCLE,
-    USE_MOCK_DATA
-)
-
+from ..config.database import get_database_url
 from .mock_db import mock_db
+
+# Get environment variables
+USE_MOCK_DATA = os.getenv('USE_MOCK_DATA', 'true').lower() == 'true'
 
 logger = logging.getLogger(__name__)
 
@@ -57,25 +47,14 @@ class DatabaseManager:
         """Set up the database engine with retries."""
         try:
             if not self.engine:
-                db_url = URL.create(
-                    "postgresql",
-                    username=PGUSER,
-                    password=PGPASSWORD,
-                    host=PGHOST,
-                    port=PGPORT,
-                    database=PGDATABASE,
-                    query={
-                        "sslmode": PGSSLMODE,
-                        "connect_timeout": str(CONNECT_TIMEOUT)
-                    }
-                )
+                url = get_database_url()
                 self.engine = create_engine(
-                    db_url,
+                    url,
                     pool_pre_ping=True,
-                    pool_size=SQLALCHEMY_POOL_SIZE,
-                    max_overflow=SQLALCHEMY_MAX_OVERFLOW,
-                    pool_timeout=SQLALCHEMY_POOL_TIMEOUT,
-                    pool_recycle=SQLALCHEMY_POOL_RECYCLE
+                    pool_size=int(os.getenv("SQLALCHEMY_POOL_SIZE", "5")),
+                    max_overflow=int(os.getenv("SQLALCHEMY_MAX_OVERFLOW", "10")),
+                    pool_timeout=int(os.getenv("SQLALCHEMY_POOL_TIMEOUT", "30")),
+                    pool_recycle=int(os.getenv("SQLALCHEMY_POOL_RECYCLE", "1800"))
                 )
                 self.SessionLocal = sessionmaker(
                     autocommit=False,
@@ -95,7 +74,7 @@ class DatabaseManager:
             self._setup_retries += 1
             if self._setup_retries >= self._max_retries:
                 logger.error("Max retries reached for database setup")
-                self.use_mock = True
+                raise
             time.sleep(self._retry_delay)
             raise  # Re-raise for backoff to handle
             
