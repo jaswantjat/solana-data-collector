@@ -1,27 +1,23 @@
 """FastAPI server for Solana Data Collector."""
-import asyncio
 import logging
-import os
-import sys
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.append(project_root)
-
+from src.config import config
 from src.collectors.token_launcher import TokenLaunchCollector
 from src.collectors.dex_trade import DexTradeCollector
 from src.collectors.wallet_analyzer import WalletAnalyzer
 from src.analyzers.suspicious_activity_analyzer import SuspiciousActivityAnalyzer
 from src.managers.blacklist_manager import BlacklistManager
 from src.database.connection import db_manager
+from src.utils.logging import setup_logger
 
-logger = logging.getLogger(__name__)
+# Configure logging
+logger = setup_logger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
@@ -33,7 +29,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.get('CORS_ORIGINS', ["*"]),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,121 +45,134 @@ class TokenAnalysisRequest(BaseModel):
     include_holder_analysis: bool = True
     include_twitter_analysis: bool = True
 
+class TokenAnalysisResponse(BaseModel):
+    token_address: str
+    is_suspicious: bool
+    risk_factors: List[str]
+    confidence_score: float
+    analysis_timestamp: datetime
+
 class WalletAnalysisRequest(BaseModel):
     wallet_address: str
+    include_transaction_history: bool = True
+
+class WalletAnalysisResponse(BaseModel):
+    wallet_address: str
+    risk_score: float
+    suspicious_transactions: List[Dict]
+    analysis_timestamp: datetime
 
 class BlacklistInfo(BaseModel):
     total_blacklisted: int
     total_scam_amount: float
     recent_additions: List[Dict]
 
+async def get_db():
+    """Dependency for database sessions."""
+    session = db_manager.get_session()
+    try:
+        yield session
+    finally:
+        session.close()
+
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database connection on startup."""
+    """Initialize services on startup."""
     try:
-        # Test database connection
-        with db_manager.get_session() as session:
-            result = session.execute("SELECT 1").scalar()
-            if result != 1:
-                raise ValueError("Database connection test failed")
-        logger.info("Database connection established successfully")
+        logger.info("Initializing database connection...")
+        db_manager.get_session()
+        
+        logger.info("Initializing blacklist manager...")
+        await blacklist_manager.initialize()
+        
+        logger.info("API server started successfully")
     except Exception as e:
-        logger.error(f"Failed to establish database connection: {str(e)}")
-        # Don't raise the error - let the app start anyway
-        # Individual endpoints will handle DB errors
+        logger.error(f"Error during startup: {str(e)}")
+        raise
 
 @app.get("/")
-def root():
+async def root():
     """Root endpoint."""
-    return {"message": "Solana Data Collector API is running"}
+    return {"status": "healthy", "timestamp": datetime.utcnow()}
 
-@app.post("/analyze/token")
-async def analyze_token(request: TokenAnalysisRequest):
+@app.post("/analyze/token", response_model=TokenAnalysisResponse)
+async def analyze_token(
+    request: TokenAnalysisRequest,
+    db=Depends(get_db)
+):
     """Analyze a Solana token for suspicious activity."""
     try:
-        # Initialize collectors
-        token_collector = TokenLaunchCollector()
-        dex_collector = DexTradeCollector()
+        logger.info(f"Analyzing token: {request.token_address}")
         
-        # Collect token data
-        token_data = await token_collector.collect_token_data(request.token_address)
-        trade_data = await dex_collector.collect_trade_data(request.token_address)
-        
-        # Analyze for suspicious activity
-        analysis = await suspicious_analyzer.analyze_token(
-            token_data=token_data,
-            trade_data=trade_data,
+        # Perform analysis
+        analysis_result = await suspicious_analyzer.analyze_token(
+            request.token_address,
             include_holder_analysis=request.include_holder_analysis,
-            include_twitter_analysis=request.include_twitter_analysis
+            include_twitter_analysis=request.include_twitter_analysis,
+            db_session=db
         )
         
-        return {
-            "token_address": request.token_address,
-            "analysis_results": analysis,
-            "token_data": token_data,
-            "trade_data": trade_data
-        }
+        return TokenAnalysisResponse(
+            token_address=request.token_address,
+            is_suspicious=analysis_result.is_suspicious,
+            risk_factors=analysis_result.risk_factors,
+            confidence_score=analysis_result.confidence_score,
+            analysis_timestamp=datetime.utcnow()
+        )
         
     except Exception as e:
         logger.error(f"Error analyzing token {request.token_address}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error analyzing token: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/analyze/wallet")
-async def analyze_wallet(request: WalletAnalysisRequest):
+@app.post("/analyze/wallet", response_model=WalletAnalysisResponse)
+async def analyze_wallet(
+    request: WalletAnalysisRequest,
+    db=Depends(get_db)
+):
     """Analyze a wallet's trading history and behavior."""
     try:
-        analyzer = WalletAnalyzer()
-        analysis = await analyzer.analyze_wallet(request.wallet_address)
-        return {
-            "wallet_address": request.wallet_address,
-            "analysis_results": analysis
-        }
+        analyzer = WalletAnalyzer(db_session=db)
+        analysis = await analyzer.analyze_wallet(
+            request.wallet_address,
+            include_history=request.include_transaction_history
+        )
+        return analysis
     except Exception as e:
         logger.error(f"Error analyzing wallet {request.wallet_address}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/blacklist/stats")
-def get_blacklist_stats() -> BlacklistInfo:
+@app.get("/blacklist/stats", response_model=BlacklistInfo)
+async def get_blacklist_stats(db=Depends(get_db)):
     """Get statistics about blacklisted addresses."""
     try:
-        stats = blacklist_manager.get_stats()
+        stats = await blacklist_manager.get_stats(db_session=db)
         return BlacklistInfo(**stats)
     except Exception as e:
         logger.error(f"Error getting blacklist stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/monitor/status")
-def get_monitor_status():
+async def get_monitor_status(db=Depends(get_db)):
     """Get current monitoring status."""
     try:
-        with db_manager.get_session() as session:
-            recent_txs = session.execute(
-                "SELECT COUNT(*) FROM transactions WHERE timestamp > NOW() - INTERVAL '1 hour'"
-            ).scalar()
-            
-            return {
-                "status": "running",
-                "transactions_last_hour": recent_txs,
-                "last_update": datetime.utcnow().isoformat()
-            }
+        return {
+            "status": "active",
+            "last_update": datetime.utcnow(),
+            "monitored_tokens": await TokenLaunchCollector(db_session=db).get_monitored_count(),
+            "active_alerts": await suspicious_analyzer.get_active_alerts_count(db_session=db)
+        }
     except Exception as e:
         logger.error(f"Error getting monitor status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/token/{token_address}")
-def get_token_data(token_address: str):
+async def get_token_data(token_address: str, db=Depends(get_db)):
     """Gather all relevant data for a token."""
     try:
-        with db_manager.get_session() as session:
-            token_data = session.execute(
-                "SELECT * FROM tokens WHERE address = %s", (token_address,)
-            ).fetchone()
-            return {"token_data": token_data}
+        collector = TokenLaunchCollector(db_session=db)
+        return await collector.get_token_data(token_address)
     except Exception as e:
-        logger.error(f"Error getting token data: {str(e)}")
+        logger.error(f"Error getting token data for {token_address}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
