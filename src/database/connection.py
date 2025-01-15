@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import settings
-from src.config.database import get_connection_string
+from src.config.database import get_database_url
 
 logger = logging.getLogger(__name__)
 
@@ -27,26 +27,9 @@ class DatabaseManager:
     def _create_connection_url(self) -> URL:
         """Create SQLAlchemy URL object for database connection."""
         try:
-            # Get the connection string from config
-            connection_string = get_connection_string()
-            logger.info("Created database connection string")
-            
-            # Create URL object
-            url = URL.create(
-                'postgresql+psycopg2',
-                query={
-                    'application_name': 'solana_data_collector',
-                    'client_encoding': 'utf8',
-                    'keepalives': '1',
-                    'keepalives_idle': '30',
-                    'keepalives_interval': '10',
-                    'keepalives_count': '5'
-                }
-            ).set(connection_string)
-            
-            logger.info("Created database URL object")
+            # Get the URL object from config
+            url = get_database_url()
             return url
-            
         except Exception as e:
             logger.error(f"Failed to create connection URL: {str(e)}")
             raise
