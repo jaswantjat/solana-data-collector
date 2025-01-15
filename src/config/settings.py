@@ -62,26 +62,17 @@ def get_database_url():
     # Build connection URL
     url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
     
-    # Add connection parameters
+    # Add psycopg2 specific parameters
     params = {
         'sslmode': os.environ.get('PGSSLMODE', 'require'),
         'connect_timeout': os.environ.get('CONNECT_TIMEOUT', '30'),
+        'client_encoding': 'utf8',
         'application_name': 'solana_data_collector',
         'keepalives': '1',
         'keepalives_idle': '30',
         'keepalives_interval': '10',
         'keepalives_count': '5',
-        'client_encoding': 'utf8',
     }
-    
-    # Add SQLAlchemy specific pool settings
-    params.update({
-        'pool_size': os.environ.get('POOL_SIZE', '5'),
-        'max_overflow': os.environ.get('MAX_OVERFLOW', '10'),
-        'pool_timeout': os.environ.get('POOL_TIMEOUT', '30'),
-        'pool_pre_ping': 'true',
-        'pool_recycle': '3600',
-    })
     
     # Build the final URL with parameters
     final_url = f"{url}?{urllib.parse.urlencode(params)}"
@@ -89,6 +80,13 @@ def get_database_url():
     return final_url
 
 DATABASE_URL = get_database_url()
+
+# SQLAlchemy Settings
+SQLALCHEMY_POOL_SIZE = int(os.environ.get('POOL_SIZE', '5'))
+SQLALCHEMY_MAX_OVERFLOW = int(os.environ.get('MAX_OVERFLOW', '10'))
+SQLALCHEMY_POOL_TIMEOUT = int(os.environ.get('POOL_TIMEOUT', '30'))
+SQLALCHEMY_POOL_PRE_PING = os.environ.get('POOL_PRE_PING', 'true')
+SQLALCHEMY_POOL_RECYCLE = int(os.environ.get('POOL_RECYCLE', '3600'))
 
 # Supabase Settings
 SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://oxptysjmxpndgyfmjoge.supabase.co')
