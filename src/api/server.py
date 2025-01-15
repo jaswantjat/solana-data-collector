@@ -14,16 +14,21 @@ from src.collectors.wallet_analyzer import WalletAnalyzer
 from src.analyzers.suspicious_activity_analyzer import SuspiciousActivityAnalyzer
 from src.managers.blacklist_manager import BlacklistManager
 from src.database.connection import db_manager
-from src.utils.logging import setup_logger
+from src.utils.logging import get_logger
+from src.api.middleware import setup_middleware
+from src.api.health import router as health_router
 
 # Configure logging
-logger = setup_logger(__name__)
+logger = get_logger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
     title="Solana Data Collector API",
     description="API for analyzing Solana tokens and tracking suspicious activity",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
 # Add CORS middleware
@@ -34,6 +39,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Set up custom middleware
+setup_middleware(app)
+
+# Include routers
+app.include_router(health_router, prefix="/health", tags=["Health"])
 
 # Initialize managers
 blacklist_manager = BlacklistManager()
@@ -93,7 +104,11 @@ async def startup_event():
 @app.get("/")
 async def root():
     """Root endpoint."""
-    return {"status": "healthy", "timestamp": datetime.utcnow()}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow(),
+        "version": "1.0.0"
+    }
 
 @app.post("/analyze/token", response_model=TokenAnalysisResponse)
 async def analyze_token(

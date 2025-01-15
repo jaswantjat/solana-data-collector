@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     iputils-ping \
     dnsutils \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set work directory
@@ -58,6 +59,10 @@ RUN chmod -R 755 /app
 
 # Expose the port
 EXPOSE ${PORT}
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Set the command to run the application
 CMD ["python", "-m", "src.main"]
