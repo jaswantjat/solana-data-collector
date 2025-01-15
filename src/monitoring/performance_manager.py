@@ -20,17 +20,15 @@ class PerformanceMetrics:
     response_time: float
     cpu_usage: float
     memory_usage: float
-    active_connections: int
     cache_hit_rate: float
-    error_rate: float
 
 class PerformanceManager:
     _instance = None
+    _initialized = False
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
@@ -40,6 +38,9 @@ class PerformanceManager:
             self.metrics_history = defaultdict(list)
             self.cache = {}
             self.cache_config = self._load_cache_config()
+            
+            # Initialize Redis
+            self._init_redis()
             
             # Initialize Prometheus metrics
             try:
@@ -62,7 +63,7 @@ class PerformanceManager:
                     ['type']
                 )
             except ValueError:
-                # If metrics already exist, get them from registry
+                logger.warning("Prometheus metrics already registered, retrieving from registry")
                 for metric in REGISTRY.collect():
                     if metric.name == 'response_time_seconds':
                         self.response_time_histogram = metric
@@ -72,23 +73,37 @@ class PerformanceManager:
                         self.cache_hit_rate_gauge = metric
                     elif metric.name == 'error_count':
                         self.error_counter = metric
-
-            # Start Prometheus metrics server
-            start_http_server(8000)
+            
+            try:
+                start_http_server(8000)
+                logger.info("Prometheus metrics server started on port 8000")
+            except Exception as e:
+                logger.error(f"Failed to start Prometheus server: {e}")
             
             self._initialized = True
-            
+
     async def _init_redis(self):
-        """Initialize Redis connection"""
-        try:
-            self.redis = redis.from_url(
-                os.getenv("REDIS_URL", "redis://localhost"),
-                encoding="utf-8",
-                decode_responses=True
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize Redis: {str(e)}")
-            
+        """Initialize Redis connection with retries"""
+        max_retries = 3
+        retry_delay = 5  # seconds
+        
+        redis_url = os.getenv("REDIS_URL", "redis://localhost")
+        
+        for attempt in range(max_retries):
+            try:
+                self.redis = redis.from_url(redis_url, decode_responses=True)
+                # Test the connection
+                await self.redis.ping()
+                logger.info("Successfully connected to Redis")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Failed to connect to Redis (attempt {attempt + 1}/{max_retries}): {e}")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(f"Failed to connect to Redis after {max_retries} attempts: {e}")
+                    self.redis = None
+
     def _init_metrics(self):
         """Initialize performance metrics"""
         self.metrics = {
@@ -296,15 +311,12 @@ class PerformanceManager:
             memory = psutil.virtual_memory()
             total_requests = self.metrics["cache_hits"] + self.metrics["cache_misses"]
             cache_hit_rate = (self.metrics["cache_hits"] / total_requests * 100) if total_requests > 0 else 0
-            total_errors = sum(self.metrics["errors"].values())
             
             return PerformanceMetrics(
                 response_time=avg_response_time,
                 cpu_usage=cpu_usage,
                 memory_usage=memory.percent,
-                active_connections=self.metrics["active_connections"],
-                cache_hit_rate=cache_hit_rate,
-                error_rate=total_errors
+                cache_hit_rate=cache_hit_rate
             )
             
         except Exception as e:
