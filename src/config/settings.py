@@ -2,6 +2,9 @@
 import os
 from pathlib import Path
 import urllib.parse
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -26,27 +29,24 @@ REDIS_DB = int(os.environ.get('REDIS_DB', '0'))
 
 # Database Settings
 def get_database_url():
-    """Get database URL with proper SSL and connection settings"""
-    url = os.environ.get('DATABASE_URL', 'postgresql://user:pass@localhost/dbname')
+    """Get database URL with proper configuration"""
+    # Check for individual components first
+    if all(os.environ.get(key) for key in ['PGUSER', 'PGPASSWORD', 'PGHOST', 'PGPORT', 'PGDATABASE']):
+        return f"postgresql://{os.environ['PGUSER']}:{os.environ['PGPASSWORD']}@{os.environ['PGHOST']}:{os.environ['PGPORT']}/{os.environ['PGDATABASE']}"
     
-    # Parse the URL
-    parsed = urllib.parse.urlparse(url)
+    # Fallback to DATABASE_URL
+    url = os.environ.get('DATABASE_URL', 'postgresql://user:pass@localhost:5432/dbname')
     
-    # Add SSL and connection parameters
-    params = {
-        'sslmode': 'require',
-        'connect_timeout': '30',
-        'application_name': 'solana_data_collector'
-    }
-    
-    # If there are existing params, update them
-    existing_params = urllib.parse.parse_qs(parsed.query)
-    for key, value in existing_params.items():
-        params[key] = value[0]
-    
-    # Reconstruct the URL with parameters
-    new_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{urllib.parse.urlencode(params)}"
-    return new_url
+    try:
+        # Parse the URL to validate it
+        parsed = urllib.parse.urlparse(url)
+        if not all([parsed.scheme, parsed.hostname, parsed.path]):
+            raise ValueError("Invalid database URL format")
+        
+        return url
+    except Exception as e:
+        logger.error(f"Failed to parse DATABASE_URL: {e}")
+        raise
 
 DATABASE_URL = get_database_url()
 

@@ -19,11 +19,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     REDIS_URL=redis://localhost:6379 \
     REDIS_DB=0 \
     LOG_LEVEL=INFO \
-    PROMETHEUS_PORT=8000 \
-    PGCONNECT_TIMEOUT=30 \
-    PGSSLMODE=require \
-    PGHOST=db.rxjcujsiwvrfpnptqozh.supabase.co \
-    PGPORT=5432
+    PROMETHEUS_PORT=8000
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
